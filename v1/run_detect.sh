@@ -1,11 +1,7 @@
 #!/bin/bash
-# run_detect.sh — V2 hockey highlight detection pipeline
-# This file lives at the project root so the `hockeydetect` shell alias keeps working.
-# It delegates to v2/scripts/ internally.
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPTS="$REPO_DIR/v2/scripts"
 
 # ---- Activate venv ----
 if [ -f "$REPO_DIR/.venv/bin/activate" ]; then
@@ -87,7 +83,7 @@ if [ "$MODE" = "folder" ]; then
   if [ ! -f "$ROIS" ]; then
     echo ""
     echo "[INFO] rois.json not found. Launching ROI picker..."
-    python "$SCRIPTS/roi_picker.py" \
+    python "$REPO_DIR/scripts/roi_picker.py" \
       "$CAM1" \
       "$CAM2" \
       --out "$ROIS"
@@ -124,7 +120,7 @@ if [ "$MODE" = "files" ]; then
   if [ ! -f "$ROIS" ]; then
     echo ""
     echo "[INFO] rois.json not found in output folder. Launching ROI picker..."
-    python "$SCRIPTS/roi_picker.py" \
+    python "$REPO_DIR/scripts/roi_picker.py" \
       "$CAM1" \
       "$CAM2" \
       --out "$ROIS"
@@ -137,9 +133,9 @@ if [ "$MODE" = "files" ]; then
 fi
 
 echo ""
-echo "[INFO] Running V2 detection..."
+echo "[INFO] Running detection..."
 
-python "$SCRIPTS/detect_events.py" \
+python "$REPO_DIR/scripts/detect_events.py" \
   "$CAM1" \
   "$CAM2" \
   "$ROIS" \
@@ -154,14 +150,13 @@ python "$SCRIPTS/detect_events.py" \
   --replay_markers \
   --replay_offset_s 1.0 \
   --cooldown_s 12 \
-  --audio_weight 0 \
   --out_csv "$OUT_CSV" \
   --out_markers "$OUT_MARKERS" \
   --verbose
 
 echo ""
 echo "[INFO] Converting markers.csv -> markers.fcpxml (timeline fps = 60)..."
-python "$SCRIPTS/timeline_convert.py" \
+python "$REPO_DIR/scripts/timeline_convert.py" \
   "$OUT_MARKERS" \
   --fps 60 \
   --out "$OUT_FCPXML" \
@@ -169,7 +164,7 @@ python "$SCRIPTS/timeline_convert.py" \
 
 echo ""
 echo "[INFO] Converting markers.csv -> markers.edl (fps = 60)..."
-python "$SCRIPTS/edl.py" \
+python "$REPO_DIR/scripts/edl.py" \
   "$OUT_MARKERS" \
   --fps 60 \
   --out "$OUT_EDL"
