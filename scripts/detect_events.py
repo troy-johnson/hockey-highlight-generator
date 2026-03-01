@@ -4,18 +4,11 @@
 # - Downscales + samples frames with ffmpeg (fast on Apple Silicon)
 # - Uses simple frame-diff motion energy in ROIs (net + slot) to find peaks
 # - Merges peaks across cameras into unified event windows
-# - Chooses a suggested primary camera per event (opposite-end cams)
+# - Chooses a suggested primary camera per event
 # - Writes events.csv + markers.csv (Resolve marker CSV import)
 #
 # Usage:
 #   python scripts/detect_events.py cam1.mp4 cam2.mp4 rois.json --verbose
-#
-# Key improvements:
-# - Clamp window duration (prevents mega-windows)
-# - Normalize using P99 (reduces saturation)
-# - Optional low-confidence penalty
-# - Cooldown suppression (reduces duplicate/sustained-pressure spam)
-# - Resolve marker CSV output (no EDL conform/linking issues)
 #
 # Args:
 #   --fps            analysis sampling fps (default 12)
@@ -29,7 +22,7 @@
 #   --replay_markers add a REPLAY marker after big plays
 #   --replay_offset_s seconds after window end to place REPLAY marker (default 1.0)
 #   --cooldown_s     suppress windows that start within this many seconds of a prior kept window (default 0)
-#   --out_csv        output debug CSV path (default events.csv)
+#   --out_csv        output debug events CSV path (default events.csv)
 #   --out_markers    output Resolve markers CSV path (default markers.csv)
 #   --timeline_fps   Resolve timeline fps for seconds->frames conversion (default 60)
 #   --verbose        print progress logs
@@ -196,7 +189,6 @@ def compute_energy_series(
 
     frames, w, h = ffmpeg_gray_frames(video_path, fps=fps, width=width)
 
-    # Clamp ROIs against the downscaled frame dims
     net_roi: ROI = rois["net"].clamp_to(w, h)
     slot_roi: ROI = rois["slot"].clamp_to(w, h)
 
@@ -243,7 +235,7 @@ def peak_windows(attack: np.ndarray, fps: int, thresh_pct: float, min_sep_s: flo
     out: list[Window] = []
     for p in peaks:
         t = p / fps
-        # tighter default windows; clamp stage will still enforce max length
+        # base window: 7s before, 6s after peak
         out.append(Window(start_s=t - 7.0, end_s=t + 6.0, peak_s=t, cam=cam, peak_val=float(attack[p])))
     return out
 
@@ -308,7 +300,6 @@ def apply_cooldown(
     if cooldown_s <= 0:
         return windows
 
-    # Sort by score desc, pick greedily, then sort by time
     by_score = sorted(windows, key=lambda r: -r[2])
     kept: list[tuple[float, float, float, int, float]] = []
     kept_starts: list[float] = []
@@ -323,7 +314,7 @@ def apply_cooldown(
 
 
 def score_to_color(score: float) -> str:
-    # Resolve marker colors (common set): Red, Orange, Yellow, Green, Blue, Purple, Pink, Cyan, Brown, White
+    # Resolve marker colors (subset we use)
     if score > 1.60:
         return "Red"
     if score > 1.30:
@@ -400,9 +391,9 @@ def main():
     # Merge windows across cameras
     intervals = [(w.start_s, w.end_s) for w in (w1 + w2)]
     merged = merge_intervals(intervals, gap_s=args.merge_gap_s)
-    log(f"[INFO] Merged into {len(merged)} candidate windows (pre-clamp)", verbose)
+    log(f"[INFO] Merged into {len(merged)} candidate windows (pre-sanitize)", verbose)
 
-    # Sanity clamp only (keep valid, non-negative). We'll cap length after scoring.
+    # Sanitize only (no length clamp yet)
     sanitized: list[tuple[float, float]] = []
     for (s, e) in merged:
         s = max(0.0, float(s))
@@ -427,7 +418,6 @@ def main():
         primary = 1 if m1 >= m2 else 2
         conf = abs(m1 - m2) / (m1 + m2 + 1e-6)
 
-        # Normalize (no hard clamps)
         if primary == 1:
             s_attack = max(0.0, m1 / (p99_1 + 1e-6))
             rebound = st1["rebound"]
@@ -477,14 +467,21 @@ def main():
     with open(args.out_markers, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["Frame", "Name", "Note", "Color", "Duration"])
+
         for (s, e, score, primary, conf) in rows_cd:
             color = score_to_color(score)
-            frame = sec_to_frame(s, args.timeline_fps)
-            name = f"PLAY cam{primary}"
-            note = f"score={score:.2f} conf={conf:.2f} win={e - s:.1f}s"
-            w.writerow([frame, name, note, color, 1])
 
-            # Optional replay marker for big plays
+            in_frame = sec_to_frame(s, args.timeline_fps)
+            win_s = max(0.0, e - s)
+            dur_frames = max(1, int(round(win_s * args.timeline_fps)))
+
+            name = f"PLAY cam{primary}"
+            note = f"score={score:.2f} conf={conf:.2f} win={win_s:.1f}s"
+
+            # RANGED marker for the play window
+            w.writerow([in_frame, name, note, color, dur_frames])
+
+            # Optional replay marker (point)
             if args.replay_markers:
                 is_big = color_rank(color) >= color_rank(args.big_color_min)
                 if is_big:
