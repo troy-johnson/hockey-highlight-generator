@@ -1,7 +1,7 @@
 # V3 Hockey Highlight Pipeline — Design Spec
 
 **Date:** 2026-04-25
-**Status:** Approved for implementation
+**Status:** Revised — pending final user approval
 
 ---
 
@@ -71,6 +71,53 @@ game_folder/
 Both `cam1/` and `cam2/` are scanned for `*.MP4` (case-insensitive), sorted by filename. Alphabetical order is always correct for GoPro chapter sequences.
 
 File-mode (`hockeydetect cam1.mp4 cam2.mp4`) remains fully supported for backwards compatibility.
+
+---
+
+## Acceptance criteria
+
+### Stage 1 — Detection
+
+1. `hockeydetect <game_folder>` completes successfully when `cam1/` and `cam2/` each contain at least one `.MP4` file
+2. `events.csv` produced by folder mode is identical in format and equivalent in detection results to file mode run against the same stitched source footage (same columns, same scoring behavior, timestamps differ by ≤ 1 frame)
+3. `sync_info.json` is always written, including when `sync_method` is `"creation_time"` or `"mixed"` fallback
+4. `cam1_concat.txt` and `cam2_concat.txt` list chapters in correct recording order (alphabetical by filename)
+5. Fails with a specific, actionable error message for each of: missing `cam1/` or `cam2/` subfolder, empty subfolder, metadata extraction failure, implausible sync offset
+
+### Stage 2 — Assembly
+
+1. `compile_reel.py` places clips on Track 1 when `events.csv` contains at least one event
+2. Clips appear in chronological game-time order
+3. Each clip's multicam angle matches `primary_cam` from `events.csv`
+4. First clip starts at or after the last frame of existing stinger content on Track 1
+5. Script logs total events placed and total reel duration to the Resolve console
+6. Script exits with a descriptive console error (does not crash silently) if `events.csv`, `sync_info.json`, or chapter files are missing or unreadable
+
+---
+
+## Folder structure assumptions
+
+- `cam1/` and `cam2/` are mandatory exact subfolder names (case-sensitive)
+- All `.MP4` files (case-insensitive extension) in each subfolder are treated as chapters for that camera; other file types are ignored
+- Alphabetical filename sort produces correct chapter order for all known GoPro naming conventions (`GOPRO####`, `GH######`, `GOPR####` / `GP######`). GoPro increments the numeric suffix sequentially per chapter within a recording session, so alphabetical = recording order.
+- Error messages:
+  - Missing subfolder: `[ERROR] cam1/ subfolder not found in <game_folder>`
+  - Empty subfolder: `[ERROR] No .MP4 files found in cam1/`
+  - Only one camera found: `[ERROR] Both cam1/ and cam2/ are required`
+
+---
+
+## Sync failure modes
+
+| Condition | Behavior |
+|---|---|
+| Timecode missing on one camera | Fall back to `creation_time` for that camera; print `[WARN]`; set `sync_method: "mixed"` in `sync_info.json` |
+| Timecode missing on both cameras | Fall back to `creation_time` for both; print `[WARN]`; set `sync_method: "creation_time"` |
+| Timecode present but unparseable | Treat as missing; fall back to `creation_time` |
+| `|offset_s| > 60` | Abort with `[ERROR] Sync offset Xs is implausibly large — likely a metadata error. Check GoPro timecode sync.` |
+| `|offset_s| < 0.1` | Treat as zero offset (cameras considered perfectly synced) |
+| Chapter counts differ between cameras | Allowed. Concat manifests reflect actual file counts. Detection processes each camera's full stream independently. |
+| Chapter timestamps non-monotonic (gap > 5s or overlap between chapters) | Print `[WARN] camN chapter M: timestamp gap/overlap of Xs detected`. Continue — ffmpeg handles concat gaps, but note in `sync_info.json` under `"warnings"`. |
 
 ---
 
@@ -168,7 +215,9 @@ Runs inside Resolve via **Workspace → Scripts**. Requires the template project
 1. **Pick game folder** via `fusion.RequestDir()` (same pattern as `import_markers_resolve.py`)
 2. **Validate inputs:** confirm `events.csv` and `sync_info.json` exist
 3. **Import chapters:** import all files from `cam1/` and `cam2/` into a new media pool bin named `"Game Footage — <folder name>"`
-4. **Create multicam clip:** use `MediaPool.CreateMultiCamClip()` with timecode sync from `sync_info.json`. Angle 1 = cam1, Angle 2 = cam2.
+4. **Create multicam clip:** use the Resolve Python API to create a multicam clip from the imported chapter items, synced by timecode using `sync_info.json`. Angle 1 = cam1, Angle 2 = cam2.
+   - **Primary path:** `MediaPool.CreateMultiCamClip(clipsList, multiCamInfo)` — verify exact signature against installed Resolve scripting docs (`Help → Developer → Scripting`) before implementing, as it varies by version.
+   - **Fallback:** if multicam clip creation is unavailable or fails, log `[WARN] multicam creation failed — falling back to dual-track placement` and place cam1 clips on Video Track 1 and cam2 clips on Video Track 2 instead. Angle switching is lost in this fallback, but the reel is still assembled.
 5. **Read events.csv:** parse all events, apply `cam1_detect_offset_s` / `cam2_detect_offset_s` to convert each event's `start_s` / `end_s` to recording-relative frame positions
 6. **Sort events** by `start_s` (chronological game order)
 7. **Find stinger end:** read existing clips on Video Track 1, take the last clip's end frame as the placement cursor
@@ -186,9 +235,17 @@ Runs inside Resolve via **Workspace → Scripts**. Requires the template project
 - Audio Track 1 labeled "Game" — audio placed here simultaneously
 - Tracks 2–10 (video) and Track 2 (audio) are untouched
 
-#### Event inclusion
+#### Event inclusion and reel length cap
 
-All events from events.csv are included in chronological order (Red, Orange, Yellow, Blue). No budget cap — the user trims the reel down to 5-6 min manually. This is intentional: V2 precision (~60%) means pre-cutting to 5-6 min would discard too many genuine highlights.
+All events are placed in chronological game order. Reel length is variable depending on V2 output, but is capped at **900s (15 min)** to keep the review session bounded.
+
+If total event duration would exceed the cap, events are dropped in this order (lowest priority first):
+1. Blue events, lowest score first
+2. Yellow events, lowest score first
+3. Orange events, lowest score first
+4. Red events are **never dropped** — they are always included regardless of cap
+
+The cap is configurable via `--max_reel_s` in `compile_reel.py` (default: 900). The actual reel length is logged to the Resolve console on completion.
 
 #### Clip durations
 
