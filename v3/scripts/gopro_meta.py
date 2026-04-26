@@ -50,7 +50,7 @@ def extract_chapter_time(chapter_path: str) -> tuple[float, str]:
         try:
             return timecode_to_seconds(tc), "timecode"
         except Exception:
-            pass
+            print(f"[WARN] Timecode '{tc}' in {chapter_path} is unparseable — falling back to creation_time", flush=True)
 
     ct = data.get("format", {}).get("tags", {}).get("creation_time")
     if ct:

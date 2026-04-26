@@ -63,6 +63,19 @@ def test_extract_falls_back_to_creation_time(monkeypatch):
     assert source == "creation_time"
     assert seconds == pytest.approx(37800.5, abs=1.0)
 
+_FFPROBE_NO_METADATA = json.dumps({
+    "streams": [],
+    "format": {"tags": {}}
+})
+
+def test_extract_raises_when_no_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.check_output",
+        lambda *a, **k: _FFPROBE_NO_METADATA.encode()
+    )
+    with pytest.raises(ValueError, match="No usable timecode"):
+        extract_chapter_time("/fake/GOPRO1801.MP4")
+
 # ---------------------------------------------------------------------------
 # compute_sync
 # ---------------------------------------------------------------------------
@@ -101,6 +114,10 @@ def test_sync_method_timecode():
 def test_sync_method_mixed():
     info = _make_sync(37800.0, 37800.5, "timecode", "creation_time")
     assert info["sync_method"] == "mixed"
+
+def test_sync_method_creation_time():
+    info = _make_sync(37800.0, 37800.5, "creation_time", "creation_time")
+    assert info["sync_method"] == "creation_time"
 
 # ---------------------------------------------------------------------------
 # write_concat_manifest
