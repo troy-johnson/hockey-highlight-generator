@@ -270,9 +270,17 @@ In Phase 2 (ML re-ranker), these approximations are replaced with a trained clas
 
 ## Out of scope (Phase 2 — separate spec)
 
-- **ML re-ranker:** `sklearn.LogisticRegression` trained on labeled V2 feature vectors to classify events as goal / penalty / non-scoring / false positive. Enables: always include all goals, include penalties if budget allows, fill remaining time with non-scoring.
-- **VLM keyframe scoring:** moondream2 via ollama (excluded until after Phase 2 is proven)
-- **Goal detection automation:** auto-detecting goals from optical flow or audio patterns
+Phase 2 introduces PyTorch as an accepted dependency (previously excluded from V1/V2).
+
+- **HockeyAI object detection** ([SimulaMet-HOST/HockeyAI](https://huggingface.co/SimulaMet-HOST/HockeyAI)): YOLOv8 model detecting puck, players, goaltender, goal frame, and referee per frame. Run at low fps (same as optical flow) on each camera. Applications:
+  - **Goal detection:** puck crossing goal frame bounding box → scoring play classification, enabling "always include all goals" priority rule without manual labeling
+  - **Automatic ROI selection:** goal frame bounding box replaces the interactive ROI picker for net region
+  - **Better primary_cam selection:** prefer the angle where the puck is detected over pure optical flow magnitude
+  - **Penalty signal:** referee proximity to player cluster as a weak penalty indicator
+  - **Risk:** model was likely trained on broadcast/arena cameras; validate detection accuracy on GoPro behind-the-net footage before committing. If puck detection recall < 70% on sample frames, use goal frame detection only and fall back to sklearn re-ranker for classification.
+- **ML re-ranker:** `sklearn.LogisticRegression` trained on labeled V2 feature vectors + HockeyAI detection features (puck-to-net distance, player density near goal frame, referee presence). Classifies events as goal / penalty / non-scoring / false positive.
+- **Priority-based reel assembly:** replace the 900s color-tier cap with: all goals included → penalties if budget allows → non-scoring fills remaining time
+- **VLM keyframe scoring:** moondream2 via ollama — deferred until after Phase 2 is proven
 - **Slo-mo replay insertion:** automatically duplicating goal clips at reduced speed on a separate track
 
 ---
