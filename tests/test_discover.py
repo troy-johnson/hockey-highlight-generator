@@ -72,3 +72,16 @@ def test_empty_cam1_exits(tmp_path):
     (tmp_path / "cam2" / "GOPRO1901.MP4").touch()
     with pytest.raises(SystemExit, match="No .MP4"):
         discover(str(tmp_path))
+
+
+def test_empty_cam2_exits(tmp_path):
+    (tmp_path / "cam1").mkdir()
+    (tmp_path / "cam1" / "GOPRO1801.MP4").touch()
+    (tmp_path / "cam2").mkdir()
+    with pytest.raises(SystemExit, match="No .MP4"):
+        discover(str(tmp_path))
+
+
+def test_both_cameras_missing_exits(tmp_path):
+    with pytest.raises(SystemExit, match="Both cam1/ and cam2/ are required"):
+        discover(str(tmp_path))

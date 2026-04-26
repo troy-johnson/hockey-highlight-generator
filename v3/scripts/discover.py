@@ -16,6 +16,9 @@ def discover(game_folder: str) -> dict[str, list[str]]:
     root = Path(game_folder)
     result: dict[str, list[str]] = {}
 
+    if not (root / "cam1").is_dir() and not (root / "cam2").is_dir():
+        sys.exit("[ERROR] Both cam1/ and cam2/ are required")
+
     for cam in ("cam1", "cam2"):
         subfolder = root / cam
         if not subfolder.is_dir():
