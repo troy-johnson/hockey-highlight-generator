@@ -1,7 +1,7 @@
 # V3 Hockey Highlight Pipeline — Design Spec
 
 **Date:** 2026-04-25
-**Status:** Revised — pending final user approval
+**Status:** Approved — implementation plan at [docs/plans/2026-04-25-v3-highlight-pipeline.md](../plans/2026-04-25-v3-highlight-pipeline.md)
 
 ---
 
