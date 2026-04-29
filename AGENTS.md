@@ -15,11 +15,11 @@ The alias is defined on the user's machine and points to this file by absolute p
 ## Active code
 
 - **`v2/scripts/`** — detection engine (optical flow + rolling threshold). Active, do not break.
-- **`v3/scripts/`** — V3 pipeline in progress: chapter discovery, timecode sync.
-- **`v3/resolve_scripts/`** — V3 Resolve assembly script in progress.
+- **`v3/scripts/`** — V3 chapter discovery (`discover.py`) and timecode sync (`gopro_meta.py`). Complete.
+- **`v3/resolve_scripts/`** — V3 Resolve reel assembly (`compile_reel.py`). Complete.
 - **`v1/`** — read-only archive. Do not modify.
 
-V3 is the active development branch. See `docs/specs/` and `docs/plans/` for specs and plans.
+V3 Phase 1 is complete and merged. See `docs/specs/` and `docs/plans/` for specs and plans.
 
 ## Key design decisions
 
@@ -37,9 +37,9 @@ V3 is the active development branch. See `docs/specs/` and `docs/plans/` for spe
 - **Output schema is frozen**: `markers.csv` columns (Frame, Name, Note, Color,
   Duration) must not change — downstream Resolve scripts depend on them.
 
-## V3 pipeline (in progress)
+## V3 pipeline
 
-Phase 1 (active): Chapter-aware detection + Resolve reel assembly.
+Phase 1 (complete): Chapter-aware detection + Resolve reel assembly.
 - Spec: `docs/specs/001-v3-highlight-pipeline-2026-04-25.md`
 - Plan: `docs/plans/2026-04-25-v3-highlight-pipeline.md`
 - New scripts: `v3/scripts/discover.py`, `v3/scripts/gopro_meta.py`,
