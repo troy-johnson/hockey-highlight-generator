@@ -4,7 +4,9 @@ import pytest
 
 from compile_reel import (
     _get_resolve,
+    _find_chapter_for_frame,
     _resolve_assemble,
+    _tc_to_frames,
     main,
     Event,
     calc_source_frames,
@@ -400,7 +402,7 @@ def test_main_calls_resolve_assemble_with_selected_events_and_sync_info(monkeypa
 
     monkeypatch.setattr("compile_reel._get_resolve", lambda: _FakeResolve())
     monkeypatch.setattr("compile_reel.load_events", lambda _path: loaded_events)
-    monkeypatch.setattr("compile_reel.select_events", lambda _events: selected_events)
+    monkeypatch.setattr("compile_reel.select_events", lambda _events, max_reel_s=900.0: selected_events)
 
     def _fake_resolve_assemble(resolve, game_folder, events, parsed_sync_info):
         calls.append((resolve, game_folder, events, parsed_sync_info))
@@ -846,3 +848,114 @@ def test_resolve_assemble_imports_all_chapter_files(tmp_path):
     )
 
     assert set(media_pool.imported_paths) == set(cam1_files + cam2_files)
+
+
+# ---------------------------------------------------------------------------
+# _find_chapter_for_frame / dual-track chapter boundary clamping
+# ---------------------------------------------------------------------------
+
+
+def test_find_chapter_for_frame_single_chapter():
+    item = _FakeMediaItem("/a/GOPRO1801.MP4", duration_tc="00:01:00:00")  # 60s = 3600f at 60fps
+    chapter_item, local_frame, ch_start, ch_dur = _find_chapter_for_frame([item], 1200, 60)
+    assert chapter_item is item
+    assert local_frame == 1200
+    assert ch_start == 0
+    assert ch_dur == _tc_to_frames("00:01:00:00", 60)
+
+
+def test_find_chapter_for_frame_second_of_two_chapters():
+    item1 = _FakeMediaItem("/a/GOPRO1801.MP4", duration_tc="00:01:00:00")  # 3600f
+    item2 = _FakeMediaItem("/a/GOPRO1802.MP4", duration_tc="00:01:00:00")  # 3600f
+    # Frame 4000 is in chapter 2 (400 frames in)
+    chapter_item, local_frame, ch_start, ch_dur = _find_chapter_for_frame(
+        [item1, item2], 4000, 60
+    )
+    assert chapter_item is item2
+    assert local_frame == 400
+    assert ch_start == 3600
+
+
+def test_dual_track_fallback_clamps_cross_chapter_event_to_chapter_boundary(tmp_path):
+    """An event whose src_out falls into chapter 2 should be clamped to end of chapter 1."""
+    cam1_path = str(tmp_path / "cam1" / "GOPRO1801.MP4")
+    cam2_path = str(tmp_path / "cam2" / "GOPRO1901.MP4")
+    _setup_game_folder(tmp_path)
+
+    # Chapter 1 is 60 s = 3600 frames at 60fps
+    # Event: start=55s (src_in≈3120f), end=70s (src_out≈4320f) → spans into chapter 2
+    # Expected: local_out clamped to 3600 (end of chapter 1), not 4320-3600=720
+    event = Event(55.0, 70.0, 1.61, "cam1", 0.95, "Red")
+    items = [
+        _FakeMediaItem(cam1_path, duration_tc="00:01:00:00"),  # 3600f
+        _FakeMediaItem(cam2_path, duration_tc="00:01:00:00"),
+    ]
+    append_calls = []
+
+    class _Mp:
+        def GetRootFolder(self): return object()
+        def AddSubFolder(self, *a): return object()
+        def SetCurrentFolder(self, *a): pass
+        def ImportMedia(self, paths): return items
+        def CreateMultiCamClip(self, *a): return None
+        def AppendToTimeline(self, clips):
+            append_calls.append(clips)
+            return [_FakePlacedItem()]
+
+    from compile_reel import _place_clips_dual_track
+    _place_clips_dual_track(
+        media_pool=_Mp(),
+        cam1_items=[items[0]],
+        cam2_items=[items[1]],
+        events=[event],
+        sync_info={"cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0},
+        timeline_fps=60,
+        stinger_end=0,
+    )
+
+    assert len(append_calls) == 1
+    clip = append_calls[0][0]
+    # local_in: src_in = max(0, 0+55-3)=52s → 3120f; local_in=3120
+    # local_out clamped to chapter end = 3600 (not 3600+720=4320 or local 720)
+    assert clip["startFrame"] == 3120
+    assert clip["endFrame"] == 3600
+
+
+# ---------------------------------------------------------------------------
+# --max_reel_s CLI argument
+# ---------------------------------------------------------------------------
+
+
+def test_main_respects_max_reel_s_argument(monkeypatch, tmp_path):
+    (tmp_path / "events.csv").write_text(
+        "start_s,end_s,score,primary_cam,confidence\n"
+        "0.0,600.0,1.61,cam1,0.95\n"   # Red, 600s
+        "700.0,800.0,0.5,cam2,0.60\n",  # Blue, 100s — total 700s > 300s cap
+        encoding="utf-8",
+    )
+    (tmp_path / "sync_info.json").write_text(
+        '{"cam1_detect_offset_s":0.0,"cam2_detect_offset_s":0.0}',
+        encoding="utf-8",
+    )
+
+    class _FakeFusion:
+        @staticmethod
+        def RequestDir(_prompt): return str(tmp_path)
+
+    class _FakeResolve:
+        @staticmethod
+        def Fusion(): return _FakeFusion()
+
+    calls = []
+
+    def _fake_select_events(events, max_reel_s=900.0):
+        calls.append(max_reel_s)
+        return events
+
+    monkeypatch.setattr("compile_reel._get_resolve", lambda: _FakeResolve())
+    monkeypatch.setattr("compile_reel.select_events", _fake_select_events)
+    monkeypatch.setattr("compile_reel._resolve_assemble", lambda *a, **kw: None)
+
+    main(["--max_reel_s", "300"])
+
+    assert calls == [300.0]

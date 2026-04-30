@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import importlib
 import json
@@ -117,10 +118,10 @@ def _tc_to_frames(tc: str, fps: int) -> int:
 
 
 def _find_chapter_for_frame(items: list, frame_num: int, fps: int) -> tuple:
-    """Return (chapter_item, local_frame) for an absolute frame in the concat stream.
+    """Return (chapter_item, local_frame, chapter_start_frame, chapter_dur_frames).
 
-    Uses Resolve's GetClipProperty("Duration") to map concatenated frame numbers
-    to specific chapter items.
+    Maps an absolute concat-stream frame number to a specific chapter item.
+    chapter_start_frame is the absolute frame where the returned chapter begins.
     """
     cumulative = 0
     for item in items:
@@ -130,9 +131,16 @@ def _find_chapter_for_frame(items: list, frame_num: int, fps: int) -> tuple:
         except Exception:
             dur_frames = round(60 * fps)  # assume 60s if unavailable
         if frame_num < cumulative + dur_frames:
-            return item, frame_num - cumulative
+            return item, frame_num - cumulative, cumulative, dur_frames
         cumulative += dur_frames
-    return items[-1], max(0, frame_num - cumulative)
+    # Past all chapters — clamp to last chapter
+    last_dur = round(60 * fps)
+    try:
+        last_dur = _tc_to_frames(items[-1].GetClipProperty("Duration"), fps)
+    except Exception:
+        pass
+    last_start = cumulative - last_dur
+    return items[-1], max(0, frame_num - last_start), last_start, last_dur
 
 
 def _place_clips_dual_track(
@@ -160,8 +168,12 @@ def _place_clips_dual_track(
             continue
 
         src_in, src_out = calc_source_frames(event, cam_offset, timeline_fps)
-        chapter_item, local_in = _find_chapter_for_frame(items, src_in, timeline_fps)
-        _, local_out = _find_chapter_for_frame(items, src_out, timeline_fps)
+        chapter_item, local_in, ch_start, ch_dur = _find_chapter_for_frame(
+            items, src_in, timeline_fps
+        )
+        # Clamp src_out to the end of the chapter that owns src_in so that
+        # cross-chapter events don't produce out-of-range local frame numbers.
+        local_out = min(src_out, ch_start + ch_dur) - ch_start
 
         result = media_pool.AppendToTimeline([{
             "mediaPoolItem": chapter_item,
@@ -172,7 +184,7 @@ def _place_clips_dual_track(
             "mediaType": 1,
         }])
         if result:
-            record_frame += src_out - src_in
+            record_frame += local_out - local_in
 
     total_s = (record_frame - stinger_end) / timeline_fps
     print(
@@ -304,7 +316,16 @@ def _resolve_assemble(resolve, game_folder: str, events: list[Event], sync_info:
     )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Assemble V3 highlight reel in DaVinci Resolve")
+    parser.add_argument(
+        "--max_reel_s",
+        type=float,
+        default=_MAX_REEL_S,
+        help=f"Maximum reel duration in seconds (default: {_MAX_REEL_S})",
+    )
+    args, _ = parser.parse_known_args(argv)
+
     try:
         resolve = _get_resolve()
     except RuntimeError as exc:
@@ -342,5 +363,5 @@ def main() -> None:
             raise SystemExit(1)
 
     events = load_events(events_csv)
-    selected_events = select_events(events)
+    selected_events = select_events(events, max_reel_s=args.max_reel_s)
     _resolve_assemble(resolve, str(game_folder), selected_events, sync_info)
