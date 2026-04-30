@@ -9,6 +9,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+# Reel length cap in seconds. Edit before running if a shorter or longer cap is needed.
+_MAX_REEL_S = 900.0
+
 
 def score_to_color(score: float) -> str:
     if score > 1.60:
@@ -54,7 +57,14 @@ def load_events(events_csv: str | Path) -> list[Event]:
     return events
 
 
-def select_events(events: list[Event], max_reel_s: float = 900.0) -> list[Event]:
+def select_events(events: list[Event], max_reel_s: float = _MAX_REEL_S) -> list[Event]:
+    """Return events in chronological order, capped at max_reel_s total duration.
+
+    Drops lowest-priority / lowest-score events first: Blue → Yellow → Orange.
+    Red events are never dropped — they are always included regardless of cap.
+    Note: if only Red events remain and their total duration exceeds max_reel_s,
+    the cap is still exceeded. This is intentional.
+    """
     selected = sorted(events, key=lambda event: event.start_s)
     total_duration = sum(event.duration_s for event in selected)
 
@@ -98,6 +108,77 @@ def _get_resolve():
         raise RuntimeError("DaVinci Resolve scripting module not available") from exc
 
     return dvr_script.scriptapp("Resolve")
+
+
+def _tc_to_frames(tc: str, fps: int) -> int:
+    """Convert HH:MM:SS:FF timecode string to frame count."""
+    h, m, s, f = (int(x) for x in tc.split(":"))
+    return (h * 3600 + m * 60 + s) * fps + f
+
+
+def _find_chapter_for_frame(items: list, frame_num: int, fps: int) -> tuple:
+    """Return (chapter_item, local_frame) for an absolute frame in the concat stream.
+
+    Uses Resolve's GetClipProperty("Duration") to map concatenated frame numbers
+    to specific chapter items.
+    """
+    cumulative = 0
+    for item in items:
+        try:
+            dur_tc = item.GetClipProperty("Duration")
+            dur_frames = _tc_to_frames(dur_tc, fps)
+        except Exception:
+            dur_frames = round(60 * fps)  # assume 60s if unavailable
+        if frame_num < cumulative + dur_frames:
+            return item, frame_num - cumulative
+        cumulative += dur_frames
+    return items[-1], max(0, frame_num - cumulative)
+
+
+def _place_clips_dual_track(
+    media_pool,
+    cam1_items: list,
+    cam2_items: list,
+    events: list[Event],
+    sync_info: dict,
+    timeline_fps: int,
+    stinger_end: int,
+) -> None:
+    """Fallback: place clips from individual camera items on Track 1 (cam1) / Track 2 (cam2)."""
+    record_frame = stinger_end
+    for event in events:
+        if event.primary_cam == "cam1":
+            items = cam1_items
+            cam_offset = sync_info["cam1_detect_offset_s"]
+            track_idx = 1
+        else:
+            items = cam2_items
+            cam_offset = sync_info["cam2_detect_offset_s"]
+            track_idx = 2
+
+        if not items:
+            continue
+
+        src_in, src_out = calc_source_frames(event, cam_offset, timeline_fps)
+        chapter_item, local_in = _find_chapter_for_frame(items, src_in, timeline_fps)
+        _, local_out = _find_chapter_for_frame(items, src_out, timeline_fps)
+
+        result = media_pool.AppendToTimeline([{
+            "mediaPoolItem": chapter_item,
+            "startFrame": local_in,
+            "endFrame": local_out,
+            "trackIndex": track_idx,
+            "recordFrame": record_frame,
+            "mediaType": 1,
+        }])
+        if result:
+            record_frame += src_out - src_in
+
+    total_s = (record_frame - stinger_end) / timeline_fps
+    print(
+        f"[compile_reel] Placed {len(events)} clips (dual-track fallback, no angle switching). "
+        f"Total: {total_s:.0f}s ({total_s / 60:.1f} min)"
+    )
 
 
 def _resolve_assemble(resolve, game_folder: str, events: list[Event], sync_info: dict) -> None:
@@ -148,23 +229,27 @@ def _resolve_assemble(resolve, game_folder: str, events: list[Event], sync_info:
     cam1_items = [i for i in imported if i.GetClipProperty("File Path") in cam1_set]
     cam2_items = [i for i in imported if i.GetClipProperty("File Path") in cam2_set]
 
+    sync_method = sync_info.get("sync_method", "timecode")
+    mc_sync_type = "timecode" if sync_method == "timecode" else "audio"
+    if sync_method != "timecode":
+        print(
+            f"[compile_reel] sync_method is '{sync_method}' — "
+            "using audio sync for multicam clip creation"
+        )
+
     multicam_item = None
     try:
         multicam_item = media_pool.CreateMultiCamClip(
             cam1_items + cam2_items,
             {
                 "name": f"Multicam — {folder_name}",
-                "syncType": "timecode",
+                "syncType": mc_sync_type,
                 "videoTrackCount": 2,
                 "audioTrackCount": 2,
             },
         )
     except Exception:
         pass
-
-    if multicam_item is None:
-        print("[compile_reel] CreateMultiCamClip failed. Cannot place clips.")
-        raise SystemExit(1)
 
     timeline_fps = 60
     try:
@@ -178,6 +263,16 @@ def _resolve_assemble(resolve, game_folder: str, events: list[Event], sync_info:
     stinger_end = 0
     if existing:
         stinger_end = max(item.GetStart() + item.GetDuration() for item in existing)
+
+    if multicam_item is None:
+        print(
+            "[compile_reel] [WARN] multicam creation failed — "
+            "falling back to dual-track placement"
+        )
+        _place_clips_dual_track(
+            media_pool, cam1_items, cam2_items, events, sync_info, timeline_fps, stinger_end
+        )
+        return
 
     record_frame = stinger_end
     for event in events:

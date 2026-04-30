@@ -15,60 +15,120 @@ def timecode_to_seconds(tc: str, fps: int = 60) -> float:
 
 
 def _creation_time_to_seconds(iso_str: str) -> float:
-    """Parse ISO 8601 creation_time to seconds-since-midnight (UTC)."""
+    """Parse ISO 8601 creation_time to seconds-since-midnight (UTC).
+
+    Note: discards the date component. Cross-midnight captures would produce
+    an incorrect offset, but hockey games do not span midnight in practice.
+    """
     dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
     return dt.hour * 3600.0 + dt.minute * 60.0 + dt.second + dt.microsecond / 1_000_000
 
 
-def extract_chapter_time(chapter_path: str) -> tuple[float, str]:
+def _parse_fps(streams: list[dict]) -> int:
+    """Extract frame rate from ffprobe stream list; defaults to 60 if unavailable."""
+    for stream in streams:
+        frac = stream.get("r_frame_rate", "")
+        if "/" in frac:
+            try:
+                num, den = frac.split("/")
+                return round(int(num) / int(den))
+            except (ValueError, ZeroDivisionError):
+                pass
+    return 60
+
+
+def extract_chapter_time(chapter_path: str) -> tuple[float, str, str | None, float]:
     """
-    Extract start time from a chapter file using ffprobe.
-    Returns (seconds_since_midnight, source) where source is "timecode" or "creation_time".
+    Extract start time and duration from a chapter file using ffprobe.
+
+    Returns (seconds_since_midnight, source, raw_timecode_or_None, duration_s).
+    source is "timecode" or "creation_time".
+    raw_timecode is the original HH:MM:SS:FF string when source == "timecode", else None.
     Raises ValueError if no usable metadata is found.
     """
     raw = subprocess.check_output(
         [
             "ffprobe", "-v", "error",
             "-show_entries", "stream_tags=timecode",
+            "-show_entries", "stream=r_frame_rate",
             "-show_entries", "format_tags=timecode,creation_time",
+            "-show_entries", "format=duration",
             "-of", "json",
             chapter_path,
         ]
     )
     data = json.loads(raw)
 
+    streams = data.get("streams", [])
+    fps = _parse_fps(streams)
+    duration_s = float(data.get("format", {}).get("duration") or 0.0)
+
     tc = (
         data.get("format", {}).get("tags", {}).get("timecode")
         or next(
             (s.get("tags", {}).get("timecode")
-             for s in data.get("streams", [])
+             for s in streams
              if s.get("tags", {}).get("timecode")),
             None,
         )
     )
     if tc:
         try:
-            return timecode_to_seconds(tc), "timecode"
+            return timecode_to_seconds(tc, fps), "timecode", tc, duration_s
         except Exception:
-            print(f"[WARN] Timecode '{tc}' in {chapter_path} is unparseable — falling back to creation_time", flush=True)
+            print(
+                f"[WARN] Timecode '{tc}' in {chapter_path} is unparseable — "
+                "falling back to creation_time",
+                flush=True,
+            )
 
     ct = data.get("format", {}).get("tags", {}).get("creation_time")
     if ct:
         try:
-            return _creation_time_to_seconds(ct), "creation_time"
+            return _creation_time_to_seconds(ct), "creation_time", None, duration_s
         except Exception:
             pass
 
     raise ValueError(f"[ERROR] No usable timecode or creation_time metadata in {chapter_path}")
 
 
+def _check_chapter_continuity(
+    chapter_metas: list[tuple[float, str, str | None, float]],
+    cam_name: str,
+) -> list[str]:
+    """
+    Check for timestamp gaps or overlaps > 5s between consecutive chapters.
+    Returns warning strings; also prints each one.
+    """
+    warnings: list[str] = []
+    for i in range(1, len(chapter_metas)):
+        prev_start, _, _, prev_dur = chapter_metas[i - 1]
+        curr_start, _, _, _ = chapter_metas[i]
+        if prev_dur <= 0:
+            continue
+        gap = curr_start - (prev_start + prev_dur)
+        if abs(gap) > 5.0:
+            direction = "gap" if gap > 0 else "overlap"
+            msg = (
+                f"[WARN] {cam_name} chapter {i + 1}: "
+                f"timestamp {direction} of {abs(gap):.1f}s detected"
+            )
+            print(msg, flush=True)
+            warnings.append(msg)
+    return warnings
+
+
 def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str]) -> dict:
     """
-    Compute camera alignment offset from first chapter of each camera.
+    Compute camera alignment offset from chapter metadata.
+    Probes all chapters for continuity checks.
     Returns sync_info dict. Raises ValueError on implausible offset (> 60s).
     """
-    cam1_s, cam1_src = extract_chapter_time(cam1_chapters[0])
-    cam2_s, cam2_src = extract_chapter_time(cam2_chapters[0])
+    cam1_meta = [extract_chapter_time(p) for p in cam1_chapters]
+    cam2_meta = [extract_chapter_time(p) for p in cam2_chapters]
+
+    cam1_s, cam1_src, cam1_tc, _ = cam1_meta[0]
+    cam2_s, cam2_src, cam2_tc, _ = cam2_meta[0]
 
     raw_offset = cam2_s - cam1_s
 
@@ -104,12 +164,17 @@ def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str]) -> dict:
             flush=True,
         )
 
+    warnings = _check_chapter_continuity(cam1_meta, "cam1")
+    warnings += _check_chapter_continuity(cam2_meta, "cam2")
+
     return {
+        "cam1_start_timecode": cam1_tc,
+        "cam2_start_timecode": cam2_tc,
         "offset_s": raw_offset,
         "cam1_detect_offset_s": cam1_detect_offset_s,
         "cam2_detect_offset_s": cam2_detect_offset_s,
         "sync_method": sync_method,
-        "warnings": [],
+        "warnings": warnings,
     }
 
 
@@ -135,14 +200,20 @@ def main(game_folder: str) -> None:
 
     sync_path = Path(game_folder) / "sync_info.json"
     sync_path.write_text(json.dumps(sync, indent=2))
-    print(f"[gopro_meta] sync_info.json written (offset={sync['offset_s']:.3f}s, "
-          f"method={sync['sync_method']})", flush=True)
+    print(
+        f"[gopro_meta] sync_info.json written (offset={sync['offset_s']:.3f}s, "
+        f"method={sync['sync_method']})",
+        flush=True,
+    )
 
     for cam, key in (("cam1", "cam1_detect_offset_s"), ("cam2", "cam2_detect_offset_s")):
         out = str(Path(game_folder) / f"{cam}_concat.txt")
         write_concat_manifest(chapters[cam], sync[key], out)
-        print(f"[gopro_meta] {cam}_concat.txt written ({len(chapters[cam])} chapters, "
-              f"offset={sync[key]:.3f}s)", flush=True)
+        print(
+            f"[gopro_meta] {cam}_concat.txt written ({len(chapters[cam])} chapters, "
+            f"offset={sync[key]:.3f}s)",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

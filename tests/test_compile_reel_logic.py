@@ -497,11 +497,16 @@ class _FakeTimelineItem:
 
 
 class _FakeMediaItem:
-    def __init__(self, path):
+    def __init__(self, path, duration_tc="01:00:00:00"):
         self._path = path
+        self._duration_tc = duration_tc
 
     def GetClipProperty(self, key):
-        return self._path if key == "File Path" else None
+        if key == "File Path":
+            return self._path
+        if key == "Duration":
+            return self._duration_tc
+        return None
 
 
 class _FakePlacedItem:
@@ -520,6 +525,7 @@ class _FakeMediaPool:
         self.root_folder = object()
         self.imported_paths = None
         self.append_calls = []
+        self.multicam_opts = None
 
     def GetRootFolder(self):
         return self.root_folder
@@ -535,6 +541,7 @@ class _FakeMediaPool:
         return self._import_returns
 
     def CreateMultiCamClip(self, items, opts):
+        self.multicam_opts = opts
         return self._multicam_returns
 
     def AppendToTimeline(self, clip_list):
@@ -687,26 +694,87 @@ def test_resolve_assemble_exits_when_import_media_returns_nothing(capsys, tmp_pa
     assert "ImportMedia" in capsys.readouterr().out
 
 
-def test_resolve_assemble_exits_when_multicam_creation_fails(capsys, tmp_path):
+def test_resolve_assemble_falls_back_to_dual_track_when_multicam_fails(tmp_path):
+    chapters = _setup_game_folder(tmp_path)
+    cam1_path = chapters["cam1"][0]
+    cam2_path = chapters["cam2"][0]
+    placed = _FakePlacedItem()
+    resolve, media_pool, _ = _make_resolve(
+        tmp_path,
+        import_returns=[_FakeMediaItem(cam1_path), _FakeMediaItem(cam2_path)],
+        multicam_returns=None,
+        append_returns=[placed],
+    )
+
+    events = [
+        Event(10.0, 20.0, 1.61, "cam1", 0.95, "Red"),
+        Event(30.0, 40.0, 1.31, "cam2", 0.88, "Orange"),
+    ]
+    sync_info = {
+        "cam1_detect_offset_s": 0.0,
+        "cam2_detect_offset_s": 0.0,
+        "sync_method": "timecode",
+    }
+
+    # Must not raise SystemExit
+    _resolve_assemble(
+        resolve=resolve,
+        game_folder=str(tmp_path),
+        events=events,
+        sync_info=sync_info,
+    )
+
+    assert len(media_pool.append_calls) == 2
+    # cam1 event → Track 1
+    assert media_pool.append_calls[0][0]["trackIndex"] == 1
+    # cam2 event → Track 2
+    assert media_pool.append_calls[1][0]["trackIndex"] == 2
+
+
+def test_resolve_assemble_uses_audio_sync_for_non_timecode_sync_method(tmp_path):
     chapters = _setup_game_folder(tmp_path)
     cam1_path = chapters["cam1"][0]
     cam2_path = chapters["cam2"][0]
     resolve, media_pool, _ = _make_resolve(
         tmp_path,
         import_returns=[_FakeMediaItem(cam1_path), _FakeMediaItem(cam2_path)],
-        multicam_returns=None,
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        _resolve_assemble(
-            resolve=resolve,
-            game_folder=str(tmp_path),
-            events=[],
-            sync_info={"cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0},
-        )
+    _resolve_assemble(
+        resolve=resolve,
+        game_folder=str(tmp_path),
+        events=[],
+        sync_info={
+            "cam1_detect_offset_s": 0.0,
+            "cam2_detect_offset_s": 0.0,
+            "sync_method": "creation_time",
+        },
+    )
 
-    assert exc_info.value.code == 1
-    assert "CreateMultiCamClip" in capsys.readouterr().out
+    assert media_pool.multicam_opts["syncType"] == "audio"
+
+
+def test_resolve_assemble_uses_timecode_sync_for_timecode_sync_method(tmp_path):
+    chapters = _setup_game_folder(tmp_path)
+    cam1_path = chapters["cam1"][0]
+    cam2_path = chapters["cam2"][0]
+    resolve, media_pool, _ = _make_resolve(
+        tmp_path,
+        import_returns=[_FakeMediaItem(cam1_path), _FakeMediaItem(cam2_path)],
+    )
+
+    _resolve_assemble(
+        resolve=resolve,
+        game_folder=str(tmp_path),
+        events=[],
+        sync_info={
+            "cam1_detect_offset_s": 0.0,
+            "cam2_detect_offset_s": 0.0,
+            "sync_method": "timecode",
+        },
+    )
+
+    assert media_pool.multicam_opts["syncType"] == "timecode"
 
 
 def test_resolve_assemble_places_clips_with_correct_source_frames(tmp_path):
