@@ -107,16 +107,33 @@ def _ffmpeg_gray_frames(
 ) -> tuple[Generator[np.ndarray, None, None], int, int]:
     """
     Yield grayscale (uint8) frames via ffmpeg at `fps` and `width`.
+    Accepts either a single MP4 path or an ffmpeg concat manifest (.txt).
     Returns (generator, out_width, out_height).
-    ffmpeg does all scaling/resampling — Python only slices numpy views.
     """
-    ow, oh = ffprobe_dims(video_path)
+    is_concat = video_path.endswith(".txt")  # NEW
+
+    if is_concat:  # NEW — get dims from first file in manifest
+        first_file = None
+        with open(video_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("file "):
+                    first_file = line[5:].strip("'\"")
+                    break
+        if first_file is None:
+            raise RuntimeError(f"No file entries found in concat manifest: {video_path}")
+        ow, oh = ffprobe_dims(first_file)
+    else:
+        ow, oh = ffprobe_dims(video_path)
+
     scale_h = int(round(oh * (width / ow)))
     if scale_h % 2 == 1:
-        scale_h += 1  # ffmpeg requires even dimensions
+        scale_h += 1
 
-    cmd = [
-        "ffmpeg", "-v", "error",
+    cmd = ["ffmpeg", "-v", "error"]
+    if is_concat:  # NEW
+        cmd += ["-f", "concat", "-safe", "0"]
+    cmd += [
         "-i", video_path,
         "-vf", f"fps={fps},scale={width}:{scale_h},format=gray",
         "-f", "rawvideo",
@@ -126,7 +143,7 @@ def _ffmpeg_gray_frames(
     if proc.stdout is None:
         raise RuntimeError("ffmpeg stdout not available")
 
-    frame_size = width * scale_h  # gray8: 1 byte per pixel
+    frame_size = width * scale_h
 
     def _gen() -> Generator[np.ndarray, None, None]:
         while True:

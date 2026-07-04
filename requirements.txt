@@ -1,0 +1,23 @@
+# Hockey Highlight Generator — core dependency stack (V2 detection + V3 pipeline).
+#
+# Build the venv on Python 3.14 via /opt/homebrew/bin/python3.14. The old
+# /usr/local Cellar python@3.14 was removed by Homebrew (2026-07-01), which
+# broke the previous venv — use the /opt/homebrew interpreter to rebuild.
+#
+# ffmpeg / ffprobe are NOT pip packages; they must be installed separately and
+# on PATH (e.g. `brew install ffmpeg`).
+#
+# Lower bounds are the known-good versions the 80-test suite passes on.
+# Do not add major dependencies to V2 (see AGENTS.md). PyTorch is a Phase 2
+# addition and belongs in a separate requirements file when that work starts.
+
+opencv-python>=4.13.0
+numpy>=2.5.0
+scipy>=1.18.0
+
+# Test runner
+pytest>=9.1.1
+
+# Optional — only imported under detect_events.py --debug_plot (lazy import).
+# Uncomment to enable debug plots:
+# matplotlib>=3.9

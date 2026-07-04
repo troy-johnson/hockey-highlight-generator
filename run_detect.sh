@@ -6,6 +6,7 @@ set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPTS="$REPO_DIR/v2/scripts"
+SCRIPTS_V3="$REPO_DIR/v3/scripts"
 
 # ---- Activate venv ----
 if [ -f "$REPO_DIR/.venv/bin/activate" ]; then
@@ -62,34 +63,51 @@ if [ "$MODE" = "folder" ]; then
     exit 1
   fi
 
-  # Auto-detect cameras
-  CAM1=$(ls "$PROJECT_DIR"/*cam1*.mp4 2>/dev/null | head -n 1 || true)
-  CAM2=$(ls "$PROJECT_DIR"/*cam2*.mp4 2>/dev/null | head -n 1 || true)
-
-  if [ -z "$CAM1" ] || [ -z "$CAM2" ]; then
-    echo "[ERROR] Could not find *cam1*.mp4 and *cam2*.mp4 in:"
-    echo "        $PROJECT_DIR"
-    exit 1
-  fi
+  PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
   ROIS="$PROJECT_DIR/rois.json"
   OUT_CSV="$PROJECT_DIR/events.csv"
   OUT_MARKERS="$PROJECT_DIR/markers.csv"
   OUT_FCPXML="$PROJECT_DIR/markers.fcpxml"
   OUT_EDL="$PROJECT_DIR/markers.edl"
+  CHAPTERS_JSON="$PROJECT_DIR/chapters.json"
+  CAM1_CONCAT="$PROJECT_DIR/cam1_concat.txt"
+  CAM2_CONCAT="$PROJECT_DIR/cam2_concat.txt"
 
   echo ""
   echo "Project folder: $PROJECT_DIR"
-  echo "Cam1: $CAM1"
-  echo "Cam2: $CAM2"
+
+  python "$SCRIPTS_V3/discover.py" "$PROJECT_DIR"
+  python "$SCRIPTS_V3/gopro_meta.py" "$PROJECT_DIR"
+
+  CAM1="$CAM1_CONCAT"
+  CAM2="$CAM2_CONCAT"
+
+  echo "Cam1 manifest: $CAM1"
+  echo "Cam2 manifest: $CAM2"
 
   # Run ROI picker if missing
   if [ ! -f "$ROIS" ]; then
+    ROI_CAM1=$(python - "$CHAPTERS_JSON" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    chapters = json.load(f)
+print(chapters["cam1"][0])
+PY
+)
+    ROI_CAM2=$(python - "$CHAPTERS_JSON" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    chapters = json.load(f)
+print(chapters["cam2"][0])
+PY
+)
+
     echo ""
     echo "[INFO] rois.json not found. Launching ROI picker..."
     python "$SCRIPTS/roi_picker.py" \
-      "$CAM1" \
-      "$CAM2" \
+      "$ROI_CAM1" \
+      "$ROI_CAM2" \
       --out "$ROIS"
 
     if [ ! -f "$ROIS" ]; then
