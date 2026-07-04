@@ -276,15 +276,35 @@ def _resolve_assemble(resolve, game_folder: str, events: list[Event], sync_info:
     if existing:
         stinger_end = max(item.GetStart() + item.GetDuration() for item in existing)
 
+    sentinel = Path(game_folder) / "MULTICAM_FALLBACK.txt"
     if multicam_item is None:
         print(
             "[compile_reel] [WARN] multicam creation failed — "
             "falling back to dual-track placement"
         )
+        # Sentinel is best-effort: never let a filesystem error on the already
+        # degraded path abort the fallback placement itself.
+        try:
+            sentinel.write_text(
+                "Multicam clip creation failed in this run — clips were placed on "
+                "dual tracks (cam1=Track 1, cam2=Track 2) with NO angle switching. "
+                "Review angle selection manually. Delete this file once handled.\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            print(f"[compile_reel] [WARN] could not write fallback sentinel: {exc}")
         _place_clips_dual_track(
             media_pool, cam1_items, cam2_items, events, sync_info, timeline_fps, stinger_end
         )
         return
+
+    # Multicam path succeeded — clear any stale sentinel from a prior fallback run.
+    try:
+        sentinel.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"[compile_reel] [WARN] could not remove stale sentinel: {exc}")
 
     record_frame = stinger_end
     for event in events:

@@ -731,6 +731,34 @@ def test_resolve_assemble_falls_back_to_dual_track_when_multicam_fails(tmp_path)
     assert media_pool.append_calls[0][0]["trackIndex"] == 1
     # cam2 event → Track 2
     assert media_pool.append_calls[1][0]["trackIndex"] == 2
+    # Fallback must leave a durable sentinel in the game folder so the operator
+    # sees the lost angle switching after the Resolve session.
+    assert (tmp_path / "MULTICAM_FALLBACK.txt").is_file()
+
+
+def test_resolve_assemble_clears_stale_sentinel_on_multicam_success(tmp_path):
+    chapters = _setup_game_folder(tmp_path)
+    cam1_path = chapters["cam1"][0]
+    cam2_path = chapters["cam2"][0]
+    stale = tmp_path / "MULTICAM_FALLBACK.txt"
+    stale.write_text("stale from a previous fallback run\n", encoding="utf-8")
+    resolve, _, _ = _make_resolve(
+        tmp_path,
+        import_returns=[_FakeMediaItem(cam1_path), _FakeMediaItem(cam2_path)],
+    )
+
+    _resolve_assemble(
+        resolve=resolve,
+        game_folder=str(tmp_path),
+        events=[],
+        sync_info={
+            "cam1_detect_offset_s": 0.0,
+            "cam2_detect_offset_s": 0.0,
+            "sync_method": "timecode",
+        },
+    )
+
+    assert not stale.exists()
 
 
 def test_resolve_assemble_uses_audio_sync_for_non_timecode_sync_method(tmp_path):
