@@ -1,7 +1,15 @@
 # tests/test_signals_concat.py
 import subprocess
 from unittest.mock import MagicMock
+import pytest
+import signals as _signals
 from signals import _ffmpeg_gray_frames
+
+
+@pytest.fixture(autouse=True)
+def _software_decode(monkeypatch):
+    # These tests check the command shape; keep the one-time VideoToolbox probe out of the Popen mocks.
+    monkeypatch.setattr(_signals, "_videotoolbox_available", lambda: False)
 
 
 def _make_popen_mock():
