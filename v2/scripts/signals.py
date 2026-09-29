@@ -325,7 +325,7 @@ def extract_audio_rms(video_path: str, fps: int, n_frames: int) -> np.ndarray:
 # Main public interface
 # ---------------------------------------------------------------------------
 
-def extract_signals(
+def _extract_single_signals(
     video_path: str,
     rois: dict,
     fps: int,
@@ -414,3 +414,50 @@ def extract_signals(
         )
 
     return net_flow, slot_flow, audio_rms
+
+
+def _recording_blocks(manifest: str) -> list[tuple[float, list[str]]]:
+    """Parse '# recording <start>' blocks of a concat manifest (empty if none)."""
+    blocks: list[tuple[float, list[str]]] = []
+    with open(manifest) as f:
+        for line in f.read().splitlines():
+            parts = line.strip().split()
+            if parts[:2] == ["#", "recording"] and len(parts) == 3:
+                blocks.append((float(parts[2]), []))
+            elif blocks and line.strip().startswith("file "):
+                blocks[-1][1].append(line.strip())
+    return blocks
+
+
+def extract_signals(
+    video_path: str,
+    rois: dict,
+    fps: int,
+    width: int,
+    verbose: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Extract net flow, slot flow and audio RMS for one camera (see
+    _extract_single_signals). A manifest with several '# recording <start>'
+    blocks is extracted one Recording at a time, and each result is placed at
+    its start on the detection timeline, with zeros in the gaps, so both
+    cameras stay aligned (hhg-38a.13).
+    """
+    blocks = _recording_blocks(video_path) if video_path.endswith(".txt") else []
+    if len(blocks) < 2:
+        return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose)
+    placed = []
+    for start, files in blocks:
+        fd, tmp = tempfile.mkstemp(prefix="recording_", suffix=".txt")
+        with os.fdopen(fd, "w") as f:
+            f.write("ffconcat version 1.0\n")
+            if start < 0:
+                f.write(f"# seek {-start:.3f}\n")
+            f.write("\n".join(files) + "\n")
+        placed.append((int(round(max(start, 0.0) * fps)), _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose)))
+    n = max(i + len(sig[0]) for i, sig in placed)
+    out = [np.zeros(n, dtype=np.float32) for _ in range(3)]
+    for i, sig in placed:
+        for k in range(3):
+            out[k][i:i + len(sig[k])] = sig[k]
+    return out[0], out[1], out[2]

@@ -310,3 +310,46 @@ def test_main_uses_audio_checked_offset_in_manifests(tmp_path):
     assert info["sync_method"] == "audio" and info["offset_s"] == 20.0
     assert "# seek 20.000" in (tmp_path / "cam1_concat.txt").read_text()
     assert "# seek" not in (tmp_path / "cam2_concat.txt").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Several Recordings per camera (hhg-38a.13)
+# ---------------------------------------------------------------------------
+
+def test_recording_starts_from_the_cameras_own_clock():
+    import gopro_meta
+    with patch("gopro_meta.extract_chapter_time") as mock:
+        mock.side_effect = [(1000.0, "timecode", "x", 2590.0), (4896.0, "timecode", "y", 3334.0)]
+        starts = gopro_meta.recording_starts([["/a/GX010007.MP4"], ["/a/GX010008.MP4", "/a/GX020008.MP4"]])
+    assert starts == [0.0, 3896.0]
+
+
+def test_manifest_blocks_for_several_recordings(tmp_path):
+    out = tmp_path / "cam1_concat.txt"
+    write_concat_manifest([["/a/R1.MP4"], ["/a/R2a.MP4", "/a/R2b.MP4"]], 20.0, str(out), rec_starts=[0.0, 3896.0])
+    lines = out.read_text().splitlines()
+    assert "inpoint" not in out.read_text()
+    assert lines.index("# recording -20.000") < lines.index("file '/a/R1.MP4'")
+    assert lines.index("# recording 3876.000") < lines.index("file '/a/R2a.MP4'") < lines.index("file '/a/R2b.MP4'")
+
+
+def test_manifest_single_recording_in_list_form_uses_seek(tmp_path):
+    out = tmp_path / "cam1_concat.txt"
+    write_concat_manifest([["/a/R1.MP4", "/a/R1b.MP4"]], 5.0, str(out), rec_starts=[0.0])
+    text = out.read_text()
+    assert "# seek 5.000" in text and "# recording" not in text
+
+
+def test_main_writes_recording_blocks(tmp_path):
+    import gopro_meta
+    chapters = {"cam1": ["/a/A8.MP4"], "cam2": ["/b/B27.MP4", "/b/B28.MP4"],
+                "recordings": {"cam1": [["/a/A8.MP4"]], "cam2": [["/b/B27.MP4"], ["/b/B28.MP4"]]}}
+    (tmp_path / "chapters.json").write_text(json.dumps(chapters))
+    sync = {"offset_s": 0.0, "cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0, "sync_method": "timecode", "warnings": []}
+    with patch("gopro_meta.compute_sync", return_value=sync), \
+         patch("gopro_meta.verify_sync_with_audio", side_effect=lambda s, a, b: s), \
+         patch("gopro_meta.recording_starts", side_effect=lambda recs: [0.0, 1500.0][:len(recs)]):
+        gopro_meta.main(str(tmp_path))
+    cam2 = (tmp_path / "cam2_concat.txt").read_text()
+    assert "# recording 0.000" in cam2 and "# recording 1500.000" in cam2
+    assert "# recording" not in (tmp_path / "cam1_concat.txt").read_text()

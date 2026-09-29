@@ -178,3 +178,28 @@ def test_dimension_probe_resolves_relative_manifest_paths(tmp_path, monkeypatch)
     monkeypatch.setattr(subprocess, "Popen", lambda cmd, **k: _make_popen_mock())
     gen, w, h = signals._ffmpeg_gray_frames(str(m), fps=12, width=640)
     assert probed == [str(tmp_path / "chapters" / "A.MP4")]
+
+
+# ---------------------------------------------------------------------------
+# Recording blocks are placed on the game timeline (hhg-38a.13)
+# ---------------------------------------------------------------------------
+
+def test_extract_signals_places_recording_blocks(tmp_path, monkeypatch):
+    import numpy as np
+    import signals
+    m = tmp_path / "cam2_concat.txt"
+    m.write_text("ffconcat version 1.0\n# recording -2.000\nfile '/b/R1.MP4'\n# recording 10.000\nfile '/b/R2.MP4'\n")
+    seen = []
+
+    def fake_single(path, rois, fps, width, verbose=False):
+        text = open(path).read(); seen.append(text)
+        n = 60 if "R1" in text else 24          # R1: 5 s after its 2 s seek, R2: 2 s (12 fps)
+        v = 1.0 if "R1" in text else 2.0
+        return (np.full(n, v, np.float32),) * 3
+
+    monkeypatch.setattr(signals, "_extract_single_signals", fake_single)
+    net, slot, audio = signals.extract_signals(str(m), {"net": None, "slot": None}, fps=12, width=640)
+    assert "# seek 2.000" in seen[0] and "R2" not in seen[0]
+    assert "# seek" not in seen[1] and "R2" in seen[1]
+    assert len(net) == 10 * 12 + 24
+    assert net[:60].tolist() == [1.0] * 60 and net[60:120].tolist() == [0.0] * 60 and net[120:].tolist() == [2.0] * 24

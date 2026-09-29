@@ -2,7 +2,13 @@
 import json
 import pytest
 from pathlib import Path
+import discover as _D
 from discover import discover
+
+
+@pytest.fixture(autouse=True)
+def _no_black_check(monkeypatch):
+    monkeypatch.setattr(_D, "is_black_recording", lambda rec: False)
 
 
 def _setup(tmp_path, cam1_files=None, cam2_files=None):
@@ -82,8 +88,8 @@ def test_empty_cam2_exits(tmp_path):
         discover(str(tmp_path))
 
 
-def test_both_cameras_missing_exits(tmp_path):
-    with pytest.raises(ValueError, match="Both cam1/ and cam2/ are required"):
+def test_empty_folder_exits(tmp_path):
+    with pytest.raises(ValueError, match="No .MP4 files found"):
         discover(str(tmp_path))
 
 

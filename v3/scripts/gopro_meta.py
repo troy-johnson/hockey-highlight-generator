@@ -181,18 +181,45 @@ def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str]) -> dict:
     }
 
 
-def write_concat_manifest(chapters: list[str], detect_offset_s: float, out_path: str) -> None:
+def recording_starts(recordings: list[list[str]]) -> list[float]:
     """
-    Write an ffmpeg concat manifest. A sync offset is recorded as a '# seek <s>'
-    comment, which readers apply with '-ss' before the concat input. Concat
-    'inpoint' is never written: on GoPro HEVC it applies only about 1/3 of the
-    offset (hhg-38a.11).
+    Start of each Recording relative to the camera's first Recording, from the
+    camera's own clock (timecode or creation_time). One camera's clock is
+    consistent across its Recordings even when it disagrees with the other
+    camera's clock (hhg-38a.13).
     """
+    t0 = extract_chapter_time(recordings[0][0])[0]
+    return [0.0] + [round(extract_chapter_time(rec[0])[0] - t0, 3) for rec in recordings[1:]]
+
+
+def write_concat_manifest(
+    chapters: list[str] | list[list[str]],
+    detect_offset_s: float,
+    out_path: str,
+    rec_starts: list[float] | None = None,
+) -> None:
+    """
+    Write an ffmpeg concat manifest for one camera.
+
+    `chapters` is a flat chapter list (one Recording) or a list of Recordings.
+    With one Recording, a sync offset is recorded as a '# seek <s>' comment,
+    which readers apply with '-ss' before the concat input. Concat 'inpoint' is
+    never written: on GoPro HEVC it applies only about 1/3 of the offset
+    (hhg-38a.11). With several Recordings, each block starts with
+    '# recording <s>': where the Recording begins on the detection timeline
+    (negative = skip that much of it), so gaps between Recordings are kept.
+    """
+    recordings = chapters if chapters and isinstance(chapters[0], list) else [chapters]
     lines = ["ffconcat version 1.0"]
-    if detect_offset_s > 0.0:
-        lines.append(f"# seek {detect_offset_s:.3f}")
-    for ch in chapters:
-        lines.append(f"file '{ch}'")
+    if len(recordings) == 1:
+        if detect_offset_s > 0.0:
+            lines.append(f"# seek {detect_offset_s:.3f}")
+        lines += [f"file '{ch}'" for ch in recordings[0]]
+    else:
+        starts = rec_starts if rec_starts is not None else [0.0] * len(recordings)
+        for rec, start in zip(recordings, starts):
+            lines.append(f"# recording {start - detect_offset_s:.3f}")
+            lines += [f"file '{ch}'" for ch in rec]
     Path(out_path).write_text("\n".join(lines) + "\n")
 
 
@@ -223,10 +250,12 @@ def main(game_folder: str) -> None:
 
     for cam, key in (("cam1", "cam1_detect_offset_s"), ("cam2", "cam2_detect_offset_s")):
         out = str(Path(game_folder) / f"{cam}_concat.txt")
-        write_concat_manifest(chapters[cam], sync[key], out)
+        recordings = chapters.get("recordings", {}).get(cam) or [chapters[cam]]
+        starts = recording_starts(recordings) if len(recordings) > 1 else [0.0]
+        write_concat_manifest(recordings, sync[key], out, rec_starts=starts)
         print(
-            f"[gopro_meta] {cam}_concat.txt written ({len(chapters[cam])} chapters, "
-            f"offset={sync[key]:.3f}s)",
+            f"[gopro_meta] {cam}_concat.txt written ({len(chapters[cam])} chapters in "
+            f"{len(recordings)} Recording(s), offset={sync[key]:.3f}s)",
             flush=True,
         )
 
