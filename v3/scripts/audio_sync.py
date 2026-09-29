@@ -7,7 +7,9 @@ GoPro timecode is each camera's own clock and can be wrong by many seconds
 Both cameras hear the same whistles, sticks and boards, so the offset can be
 measured directly: spectral-flux onset envelopes (100 Hz) of 20 s windows from
 cam2 are matched against cam1 with normalized cross-correlation. The offset is
-trusted only when several windows agree.
+trusted only when a majority of windows agree. Real rink audio spreads about
+±0.15 s between windows (sound reaches the two ends at different times), so the
+offset is accurate to about 0.1 s, enough for detection alignment.
 
 Offset convention (same as gopro_meta.compute_sync): offset_s = cam2 start
 minus cam1 start, so cam1_audio(t + offset_s) == cam2_audio(t).
@@ -23,11 +25,11 @@ SR = 8000                 # Hz, analysis sample rate
 HOP = 80                  # samples -> 100 Hz onset envelope
 ENV_SR = SR / HOP
 LOAD_S = 700.0            # seconds of audio read from the start of each camera
-QUERY_S = 20.0            # length of each cam2 window
-N_WINDOWS = 5
+QUERY_S = 40.0            # length of each cam2 window (20 s gave outliers on real rink audio)
+N_WINDOWS = 9
 MAX_OFFSET_S = 60.0       # matches gopro_meta's plausibility limit
-AGREE_S = 0.1             # windows within this of the median agree
-MIN_AGREE = 3             # windows that must agree for a confident offset
+AGREE_S = 0.25            # the cameras are ~60 m apart: per-window lags spread ~±0.15 s with where the sound was
+MIN_AGREE = 5             # a majority of the windows must agree for a confident offset
 DISAGREE_S = 0.5          # timecode vs audio difference that switches to audio
 
 
@@ -88,7 +90,7 @@ def measure_offset(cam1: np.ndarray, cam2: np.ndarray) -> dict:
     lags_arr = np.array(lags)
     med = float(np.median(lags_arr))
     agree = lags_arr[np.abs(lags_arr - med) <= AGREE_S]
-    return {"offset_s": round(float(agree.mean()), 3), "confident": len(agree) >= MIN_AGREE,
+    return {"offset_s": round(float(np.median(agree)), 3), "confident": len(agree) >= MIN_AGREE,
             "n_agree": int(len(agree)), "n_windows": len(lags)}
 
 
