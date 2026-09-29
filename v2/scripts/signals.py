@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Generator
@@ -102,6 +104,35 @@ def ffprobe_dims(video_path: str) -> tuple[int, int]:
     return w, h
 
 
+def concat_input_args(video_path: str) -> list[str]:
+    """
+    Return the ffmpeg input arguments for a video path or a concat manifest.
+
+    A camera sync offset is applied with '-ss' before the concat input. It is
+    read from a '# seek <s>' comment (written by gopro_meta) or, for older
+    manifests, from an 'inpoint' line, which is stripped: concat 'inpoint' on
+    GoPro HEVC applies only about 1/3 of the offset (hhg-38a.11).
+    """
+    if not video_path.endswith(".txt"):
+        return ["-i", video_path]
+    with open(video_path) as f:
+        lines = f.read().splitlines()
+    seek = 0.0
+    for line in lines:
+        parts = line.strip().split()
+        if parts[:2] == ["#", "seek"] and len(parts) == 3:
+            seek = float(parts[2])
+        elif parts[:1] == ["inpoint"] and len(parts) == 2:
+            seek = float(parts[1])
+    path = video_path
+    if any(line.strip().startswith("inpoint") for line in lines):
+        fd, path = tempfile.mkstemp(prefix="concat_noinpoint_", suffix=".txt")
+        with os.fdopen(fd, "w") as f:
+            f.write("\n".join(l for l in lines if not l.strip().startswith("inpoint")) + "\n")
+    args = ["-ss", f"{seek:.3f}"] if seek > 0.0 else []
+    return args + ["-f", "concat", "-safe", "0", "-i", path]
+
+
 def _ffmpeg_gray_frames(
     video_path: str, fps: int, width: int
 ) -> tuple[Generator[np.ndarray, None, None], int, int]:
@@ -130,11 +161,8 @@ def _ffmpeg_gray_frames(
     if scale_h % 2 == 1:
         scale_h += 1
 
-    cmd = ["ffmpeg", "-v", "error"]
-    if is_concat:  # NEW
-        cmd += ["-f", "concat", "-safe", "0"]
+    cmd = ["ffmpeg", "-v", "error", *concat_input_args(video_path)]
     cmd += [
-        "-i", video_path,
         "-vf", f"fps={fps},scale={width}:{scale_h},format=gray",
         "-f", "rawvideo",
         "pipe:1",
@@ -214,7 +242,7 @@ def extract_audio_rms(video_path: str, fps: int, n_frames: int) -> np.ndarray:
     # Decode the entire audio stream as mono PCM int16.
     cmd = [
         "ffmpeg", "-v", "error",
-        "-i", video_path,
+        *concat_input_args(video_path),
         "-vn",
         "-acodec", "pcm_s16le",
         "-ar", str(_AUDIO_SAMPLE_RATE),

@@ -7,6 +7,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from audio_sync import verify_sync_with_audio  # noqa: E402
+
 
 def timecode_to_seconds(tc: str, fps: int = 60) -> float:
     """Convert HH:MM:SS:FF timecode string to float seconds."""
@@ -179,12 +182,17 @@ def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str]) -> dict:
 
 
 def write_concat_manifest(chapters: list[str], detect_offset_s: float, out_path: str) -> None:
-    """Write ffmpeg concat manifest, adding inpoint on first file if detect_offset_s > 0."""
+    """
+    Write an ffmpeg concat manifest. A sync offset is recorded as a '# seek <s>'
+    comment, which readers apply with '-ss' before the concat input. Concat
+    'inpoint' is never written: on GoPro HEVC it applies only about 1/3 of the
+    offset (hhg-38a.11).
+    """
     lines = ["ffconcat version 1.0"]
-    for i, ch in enumerate(chapters):
+    if detect_offset_s > 0.0:
+        lines.append(f"# seek {detect_offset_s:.3f}")
+    for ch in chapters:
         lines.append(f"file '{ch}'")
-        if i == 0 and detect_offset_s > 0.0:
-            lines.append(f"inpoint {detect_offset_s:.3f}")
     Path(out_path).write_text("\n".join(lines) + "\n")
 
 
@@ -197,6 +205,13 @@ def main(game_folder: str) -> None:
 
     print("[gopro_meta] Extracting timecodes...", flush=True)
     sync = compute_sync(chapters["cam1"], chapters["cam2"])
+
+    # GoPro timecode is each camera's own clock; check it against rink audio (hhg-38a.12).
+    print("[gopro_meta] Checking sync against rink audio...", flush=True)
+    sync = verify_sync_with_audio(sync, chapters["cam1"][0], chapters["cam2"][0])
+    for w in sync["warnings"]:
+        if "audio" in w:
+            print(w, flush=True)
 
     sync_path = Path(game_folder) / "sync_info.json"
     sync_path.write_text(json.dumps(sync, indent=2))

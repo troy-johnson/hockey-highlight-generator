@@ -274,12 +274,39 @@ def test_manifest_no_inpoint(tmp_path):
     assert "/a/GOPRO1802.MP4" in content
 
 
-def test_manifest_with_inpoint(tmp_path):
+def test_manifest_records_seek_comment_not_inpoint(tmp_path):
+    """Offsets are written as a '# seek' comment: concat 'inpoint' on GoPro HEVC
+    applies only ~1/3 of the offset (hhg-38a.11), so it must never be written."""
     out = str(tmp_path / "cam1_concat.txt")
     write_concat_manifest(["/a/GOPRO1801.MP4", "/a/GOPRO1802.MP4"], 2.5, out)
-    lines = Path(out).read_text().splitlines()
-    file_idx = next(i for i, l in enumerate(lines) if "GOPRO1801" in l)
-    assert "inpoint 2.500" in lines[file_idx + 1]
-    file2_idx = next(i for i, l in enumerate(lines) if "GOPRO1802" in l)
-    if file2_idx + 1 < len(lines):
-        assert "inpoint" not in lines[file2_idx + 1]
+    content = Path(out).read_text()
+    assert "inpoint" not in content
+    assert "# seek 2.500" in content.splitlines()
+    assert "/a/GOPRO1801.MP4" in content and "/a/GOPRO1802.MP4" in content
+
+
+def test_manifest_zero_offset_has_no_seek(tmp_path):
+    out = str(tmp_path / "cam1_concat.txt")
+    write_concat_manifest(["/a/GOPRO1801.MP4"], 0.0, out)
+    assert "# seek" not in Path(out).read_text()
+
+
+# ---------------------------------------------------------------------------
+# main: audio check drives the manifests (hhg-38a.12)
+# ---------------------------------------------------------------------------
+
+def test_main_uses_audio_checked_offset_in_manifests(tmp_path):
+    import gopro_meta
+    (tmp_path / "chapters.json").write_text(json.dumps({"cam1": ["/a/A1.MP4"], "cam2": ["/b/B1.MP4"]}))
+    tc_sync = {"cam1_start_timecode": "16:34:01:37", "cam2_start_timecode": "16:34:01:38", "offset_s": 0.0,
+               "cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0, "sync_method": "timecode", "warnings": []}
+    audio_sync = dict(tc_sync, offset_s=20.0, cam1_detect_offset_s=20.0, sync_method="audio",
+                      warnings=["[WARN] Timecode and audio disagree by +20.00s; using audio offset 20.000s"])
+    with patch("gopro_meta.compute_sync", return_value=tc_sync), \
+         patch("gopro_meta.verify_sync_with_audio", return_value=audio_sync) as ver:
+        gopro_meta.main(str(tmp_path))
+    ver.assert_called_once_with(tc_sync, "/a/A1.MP4", "/b/B1.MP4")
+    info = json.loads((tmp_path / "sync_info.json").read_text())
+    assert info["sync_method"] == "audio" and info["offset_s"] == 20.0
+    assert "# seek 20.000" in (tmp_path / "cam1_concat.txt").read_text()
+    assert "# seek" not in (tmp_path / "cam2_concat.txt").read_text()
