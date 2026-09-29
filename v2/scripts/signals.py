@@ -386,6 +386,7 @@ def _extract_single_signals(
     fps: int,
     width: int,
     verbose: bool = False,
+    with_audio: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extract three energy signals from a single camera video.
@@ -460,6 +461,9 @@ def _extract_single_signals(
     net_flow = np.array(net_vals, dtype=np.float32)
     slot_flow = np.array(slot_vals, dtype=np.float32)
 
+    if not with_audio:  # audio weight 0: skip decoding the whole file again
+        return net_flow, slot_flow, np.zeros(n_frames, dtype=np.float32)
+
     if verbose:
         print(f"[signals] Extracting audio RMS for {video_path}...", flush=True)
 
@@ -494,6 +498,7 @@ def extract_signals(
     fps: int,
     width: int,
     verbose: bool = False,
+    with_audio: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extract net flow, slot flow and audio RMS for one camera (see
@@ -504,14 +509,14 @@ def extract_signals(
     """
     blocks = _recording_blocks(video_path) if video_path.endswith(".txt") else []
     if len(blocks) < 2:
-        return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose)
+        return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)
     placed = []
     for start, files in blocks:
         header = ["ffconcat version 1.0"] + ([f"# seek {-start:.3f}"] if start < 0 else [])
         tmp = write_temp_manifest(header + files, os.path.dirname(os.path.abspath(video_path)), "recording_")
         try:
             placed.append((int(round(max(start, 0.0) * fps)),
-                           _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose)))
+                           _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)))
         finally:
             _remove_temp_manifest(tmp)
     n = max(i + len(sig[0]) for i, sig in placed)

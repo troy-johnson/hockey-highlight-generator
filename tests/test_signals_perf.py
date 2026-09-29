@@ -92,7 +92,19 @@ def test_falls_back_to_software_when_hardware_yields_nothing(monkeypatch):
 def test_extract_both_runs_each_camera_once(monkeypatch):
     import detect_events as DE
     seen = []
-    monkeypatch.setattr(DE, "extract_signals", lambda path, rois, fps, width, verbose=False: seen.append(path) or (np.ones(3),) * 3)
+    monkeypatch.setattr(DE, "extract_signals", lambda path, rois, fps, width, verbose=False, with_audio=True: seen.append(path) or (np.ones(3),) * 3)
     monkeypatch.setenv("HHG_PARALLEL", "0")
     (a, b) = DE.extract_both("c1.txt", "c2.txt", {"camera_1": 1, "camera_2": 2}, 12, 1280, False)
     assert sorted(seen) == ["c1.txt", "c2.txt"] and len(a) == 3 and len(b) == 3
+
+
+def test_audio_is_skipped_when_not_needed(monkeypatch):
+    frame = np.zeros((720, 1280), np.uint8)
+    monkeypatch.setattr(signals, "_ffmpeg_gray_frames", lambda p, fps, width: (iter([frame, frame, frame]), 1280, 720))
+    called = []
+    monkeypatch.setattr(signals, "extract_audio_rms", lambda *a, **k: called.append(1) or np.ones(2, np.float32))
+    rois = {"net": ROI(380, 180, 410, 240), "slot": ROI(380, 60, 410, 140)}
+    net, slot, audio = signals.extract_signals("v.mp4", rois, fps=12, width=1280, with_audio=False)
+    assert not called and audio.tolist() == [0.0, 0.0] and len(net) == 2
+    signals.extract_signals("v.mp4", rois, fps=12, width=1280)
+    assert called
