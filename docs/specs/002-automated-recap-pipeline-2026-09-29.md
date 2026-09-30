@@ -97,7 +97,7 @@ The review page writes corrections back to the per-game file.
 
 ### 5.5 Scoresheet and Game Sheet (`hhg-3r5.4`, `hhg-3r5.8`, `hhg-3r5.3`)
 
-- **Transcription:** Claude vision with a JSON schema, then hockey consistency checks that flag rows. The Game Sheet holds goals, penalties, player lists, the header, goalie saves, and PIM.
+- **Transcription (local, `v3/scripts/scoresheet.py`):** Apple Vision reads the print and finds the tables. Qwen3-VL-8B (4-bit, MLX) reads the handwriting, one table crop at a time, numbers only. Each crop is read twice, and cells where the reads disagree go to review. Hockey consistency checks then flag rows. No API key and no per-game cost; Apple Silicon only. The Game Sheet holds goals, penalties, player lists, the header, goalie saves, and PIM.
 - **Order-based goal matching** with soft clock windows. Running time converts after the period starts are detected. With stop time, the clock only bounds the order.
 - **Scorer check:** jersey-number recognition verifies only the claimed scorer. It gives five review cases. Assists and penalties come from the Game Sheet only.
 
