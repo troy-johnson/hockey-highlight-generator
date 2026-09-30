@@ -31,6 +31,8 @@ MAX_OFFSET_S = 60.0       # matches gopro_meta's plausibility limit
 AGREE_S = 0.25            # the cameras are ~60 m apart: per-window lags spread ~±0.15 s with where the sound was
 MIN_AGREE = 5             # a majority of the windows must agree for a confident offset
 DISAGREE_S = 0.5          # timecode vs audio difference that switches to audio
+MIN_PEAK = 0.15           # a window's correlation peak must reach this to count (real games: ~0.3-0.6)
+EDGE_S = 0.5              # a peak this close to the edge of the search range is not a measurement
 
 
 def load_audio(path: str, seconds: float = LOAD_S) -> np.ndarray:
@@ -75,10 +77,15 @@ def measure_offset(cam1: np.ndarray, cam2: np.ndarray) -> dict:
     lo, hi = m, min(len(e2), len(e1)) - m - q
     lags: list[float] = []
     if hi > lo:
+        edge = int(EDGE_S * ENV_SR)
         for t in np.linspace(lo, hi, N_WINDOWS).astype(int):
-            region = e1[t - m: t + m + q]
-            r = _ncc(region, e2[t: t + q])
+            region, query = e1[t - m: t + m + q], e2[t: t + q]
+            if query.std() < 1e-3 or region.std() < 1e-3:   # silence: no onsets to match
+                continue
+            r = _ncc(region, query)
             k = int(np.argmax(r))
+            if r[k] < MIN_PEAK or k < edge or k > len(r) - 1 - edge:
+                continue
             frac = 0.0
             if 0 < k < len(r) - 1:                    # parabolic peak interpolation
                 a, b, c = r[k - 1], r[k], r[k + 1]
@@ -86,12 +93,12 @@ def measure_offset(cam1: np.ndarray, cam2: np.ndarray) -> dict:
                 frac = 0.5 * (a - c) / den if den != 0 else 0.0
             lags.append((k + frac - m) / ENV_SR)
     if not lags:
-        return {"offset_s": 0.0, "confident": False, "n_agree": 0, "n_windows": 0}
+        return {"offset_s": 0.0, "confident": False, "n_agree": 0, "n_windows": N_WINDOWS}
     lags_arr = np.array(lags)
     med = float(np.median(lags_arr))
     agree = lags_arr[np.abs(lags_arr - med) <= AGREE_S]
     return {"offset_s": round(float(np.median(agree)), 3), "confident": len(agree) >= MIN_AGREE,
-            "n_agree": int(len(agree)), "n_windows": len(lags)}
+            "n_agree": int(len(agree)), "n_windows": N_WINDOWS}
 
 
 def _apply_offset(sync: dict, offset: float) -> None:

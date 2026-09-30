@@ -145,3 +145,24 @@ def test_audio_rms_uses_same_seek(tmp_path, monkeypatch):
     cmd = captured[0]
     assert cmd[cmd.index("-ss") + 1] == "5.000" and cmd.index("-ss") < cmd.index("-i")
     assert cmd[cmd.index("-f") + 1] == "concat"
+
+
+# Review findings (GPT-6.1 review of #17): temporary manifests keep relative paths and are cleaned up.
+
+def test_legacy_manifest_conversion_keeps_relative_paths_working(tmp_path):
+    (tmp_path / "chapters").mkdir()
+    m = tmp_path / "cam1_concat.txt"
+    m.write_text("ffconcat version 1.0\nfile 'chapters/A.MP4'\ninpoint 3.000\n")
+    args = concat_input_args(str(m))
+    text = open(args[-1]).read()
+    assert f"file '{tmp_path / 'chapters' / 'A.MP4'}'" in text
+
+
+def test_temporary_manifests_are_removed_by_cleanup(tmp_path):
+    import signals
+    m = tmp_path / "cam1_concat.txt"
+    m.write_text("ffconcat version 1.0\nfile '/fake/A.MP4'\ninpoint 3.000\n")
+    tmp = concat_input_args(str(m))[-1]
+    assert __import__("os").path.exists(tmp)
+    signals.cleanup_temp_manifests()
+    assert not __import__("os").path.exists(tmp)

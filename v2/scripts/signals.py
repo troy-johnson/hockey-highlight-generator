@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import subprocess
@@ -104,6 +105,43 @@ def ffprobe_dims(video_path: str) -> tuple[int, int]:
     return w, h
 
 
+_TEMP_MANIFESTS: list[str] = []
+
+
+def cleanup_temp_manifests() -> None:
+    """Delete the temporary concat manifests this process wrote (also runs at exit)."""
+    while _TEMP_MANIFESTS:
+        try:
+            os.remove(_TEMP_MANIFESTS.pop())
+        except OSError:
+            pass
+
+
+atexit.register(cleanup_temp_manifests)
+
+
+def write_temp_manifest(lines: list[str], base_dir: str, prefix: str) -> str:
+    """
+    Write a temporary concat manifest. Relative 'file' entries are resolved
+    against base_dir (the original manifest's folder), because ffmpeg resolves
+    them against the manifest's own location. Removed by cleanup_temp_manifests.
+    """
+    out = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith("file "):
+            p = s[5:].strip().strip("'\"")
+            if not os.path.isabs(p):
+                p = os.path.join(base_dir, p)
+            line = f"file '{p}'"
+        out.append(line)
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(out) + "\n")
+    _TEMP_MANIFESTS.append(path)
+    return path
+
+
 def concat_input_args(video_path: str) -> list[str]:
     """
     Return the ffmpeg input arguments for a video path or a concat manifest.
@@ -126,9 +164,8 @@ def concat_input_args(video_path: str) -> list[str]:
             seek = float(parts[1])
     path = video_path
     if any(line.strip().startswith("inpoint") for line in lines):
-        fd, path = tempfile.mkstemp(prefix="concat_noinpoint_", suffix=".txt")
-        with os.fdopen(fd, "w") as f:
-            f.write("\n".join(l for l in lines if not l.strip().startswith("inpoint")) + "\n")
+        path = write_temp_manifest([l for l in lines if not l.strip().startswith("inpoint")],
+                                   os.path.dirname(os.path.abspath(video_path)), "concat_noinpoint_")
     args = ["-ss", f"{seek:.3f}"] if seek > 0.0 else []
     return args + ["-f", "concat", "-safe", "0", "-i", path]
 

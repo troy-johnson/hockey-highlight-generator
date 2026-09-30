@@ -84,3 +84,19 @@ def test_verify_survives_audio_load_failure():
         s = verify_sync_with_audio(_timecode_sync(0.0), "/a.MP4", "/b.MP4")
     assert s["sync_method"] == "timecode"
     assert any("audio check failed" in w for w in s["warnings"])
+
+
+# Review findings (GPT-6.1 review of #17): low-information audio must never be "confident".
+
+def test_silent_audio_is_not_confident():
+    z = np.zeros(int(700 * SR), np.float32)
+    r = measure_offset(z, z)
+    assert not r["confident"]
+
+
+def test_lags_at_the_search_edge_are_rejected(monkeypatch):
+    import audio_sync as A
+    # a peak pinned to the edge of the search range is not a measurement
+    monkeypatch.setattr(A, "_ncc", lambda region, q: np.concatenate([[1.0], np.zeros(len(region) - len(q))]))
+    cam1, cam2 = _pair(5.0)
+    assert not A.measure_offset(cam1, cam2)["confident"]
