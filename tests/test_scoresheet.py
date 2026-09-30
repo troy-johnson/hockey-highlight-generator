@@ -162,3 +162,29 @@ def test_find_scoresheet_photos_skips_pipeline_images(tmp_path):
     (tmp_path / "rois_preview.png").write_bytes(b"x" * 100)
     (tmp_path / "scoresheet_crops").mkdir()
     assert ss.find_scoresheet_photos(str(tmp_path)) == [str(tmp_path / "IMG_9973.jpg")]
+
+
+def test_find_scoresheet_photos_skips_non_sheet_images_and_old_outputs(tmp_path):
+    # hhg-3r5.28: the largest image used to win, even a recap graphic or a thumbnail.
+    (tmp_path / "IMG_2041.HEIC").write_bytes(b"x" * 10)
+    for name in ("recap.png", "yt_thumbnail.png", "yt_thumbnail_2.png", "yt_thumb_1.3.1.png",
+                 "Still 2026-03-01.png", "score_overlay.png", "GOPR0017.JPG", ".hidden.png"):
+        (tmp_path / name).write_bytes(b"x" * 1000)
+    for name in ("cam1.mp4", "cam2.mp4", "events.csv", "markers.csv", "markers.edl", "markers.fcpxml"):
+        (tmp_path / name).write_bytes(b"x" * 1000)
+    (tmp_path / "editprep").mkdir()
+    (tmp_path / "editprep" / "big.png").write_bytes(b"x" * 5000)
+    assert ss.find_scoresheet_photos(str(tmp_path)) == [str(tmp_path / "IMG_2041.HEIC")]
+
+
+def test_is_non_sheet_file():
+    assert ss.is_non_sheet_file("recap.png")
+    assert ss.is_non_sheet_file("markers.pdf")
+    assert not ss.is_non_sheet_file("IMG_9973.jpg")
+    assert not ss.is_non_sheet_file("GameSheet.pdf")
+
+
+def test_find_scoresheet_pdfs_skips_old_outputs(tmp_path):
+    (tmp_path / "gamesheet.pdf").write_bytes(b"%PDF")
+    (tmp_path / "markers.pdf").write_bytes(b"%PDF")
+    assert ss.find_scoresheet_pdfs(str(tmp_path)) == [str(tmp_path / "gamesheet.pdf")]

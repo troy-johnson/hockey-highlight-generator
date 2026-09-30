@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import subprocess
@@ -413,7 +414,7 @@ def _flow_values(video_path: str, rois: dict, fps: int, width: int, verbose: boo
         fr = np.ascontiguousarray(fr[y0:y1, x0:x1])
         sampled += 1
         if verbose and sampled % 500 == 0:
-            print(f"  [signals] frames processed: {sampled}", flush=True)
+            print(f"  [signals] frames processed: {sampled} ({os.path.basename(video_path)})", flush=True)
 
         if prev is None:
             prev = fr
@@ -516,6 +517,106 @@ def _recording_blocks(manifest: str) -> list[tuple[float, list[str]]]:
     return blocks
 
 
+# ---------------------------------------------------------------------------
+# Signal cache (hhg-3r5.77)
+# ---------------------------------------------------------------------------
+# One .npz file per Recording keeps the three signal arrays (a few hundred KB
+# per hour of footage). No frames or proxies are cached. The key holds the
+# identity (path, size, mtime) of every input file, every setting that
+# changes the signals, the decode path, and a hash of this file, so a change
+# to the extraction code makes the old entries unused.
+
+SIGNALS_VERSION = 1
+_CODE_HASH: str | None = None
+
+
+def _code_hash() -> str:
+    """Hash of signals.py; a code change gives new cache keys."""
+    global _CODE_HASH
+    if _CODE_HASH is None:
+        with open(os.path.abspath(__file__), "rb") as f:
+            _CODE_HASH = hashlib.sha256(f.read()).hexdigest()[:16]
+    return _CODE_HASH
+
+
+def _manifest_inputs(lines: list[str], base_dir: str) -> tuple[list[str], float]:
+    """Input file paths and seek value of manifest lines ('# seek' or a legacy 'inpoint')."""
+    files: list[str] = []
+    seek = 0.0
+    for line in lines:
+        t = line.strip()
+        parts = t.split()
+        if parts[:2] == ["#", "seek"] and len(parts) == 3:
+            seek = float(parts[2])
+        elif parts[:1] == ["inpoint"] and len(parts) == 2:
+            seek = float(parts[1])
+        elif t.startswith("file "):
+            path = t[5:].strip().strip("'\"")
+            files.append(path if os.path.isabs(path) else os.path.join(base_dir, path))
+    return files, seek
+
+
+def _file_identity(path: str) -> list:
+    st = os.stat(path)
+    return [os.path.abspath(path), st.st_size, st.st_mtime_ns]
+
+
+def signal_cache_key(files: list[str], seek: float, rois: dict, fps: int, width: int,
+                     with_audio: bool) -> str:
+    """Hash of the inputs and settings that change one Recording's signals."""
+    def roi(r):
+        return [r.x, r.y, r.w, r.h] if isinstance(r, ROI) else r
+    payload = {
+        "version": SIGNALS_VERSION,
+        "code": _code_hash(),
+        "hwaccel": _use_hwaccel(),
+        "files": [_file_identity(f) for f in files],
+        "seek": round(seek, 3),
+        "rois": {k: roi(v) for k, v in sorted(rois.items())},
+        "fps": fps, "width": width, "with_audio": bool(with_audio),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:24]
+
+
+def _cached_single_signals(video_path: str, lines: list[str] | None, base_dir: str, rois: dict,
+                           fps: int, width: int, verbose: bool, with_audio: bool, cache_dir: str | None):
+    """_extract_single_signals with an optional cache lookup around it."""
+    if not cache_dir:
+        return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)
+    if lines is None:
+        if video_path.endswith(".txt"):
+            with open(video_path) as f:
+                lines = f.read().splitlines()
+            files, seek = _manifest_inputs(lines, os.path.dirname(os.path.abspath(video_path)))
+        else:
+            files, seek = [video_path], 0.0
+    else:
+        files, seek = _manifest_inputs(lines, base_dir)
+    try:
+        key = signal_cache_key(files, seek, rois, fps, width, with_audio)
+    except OSError:  # an input is missing: let ffmpeg report it
+        return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)
+    path = os.path.join(cache_dir, f"signals_{key}.npz")
+    if os.path.exists(path):
+        try:
+            with np.load(path) as z:
+                sig = (z["net"].astype(np.float32), z["slot"].astype(np.float32), z["audio"].astype(np.float32))
+            print(f"[signals] cache hit: {os.path.basename(files[0]) if files else video_path} "
+                  f"({len(sig[0])} flow values)", flush=True)
+            return sig
+        except Exception as exc:  # damaged cache file: compute again
+            print(f"[WARN] signal cache file {path} unreadable ({exc}); computing again", flush=True)
+    sig = _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)
+    tmp = path + ".tmp.npz"
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        np.savez(tmp, net=sig[0], slot=sig[1], audio=sig[2])
+        os.replace(tmp, path)
+    except OSError as exc:  # the cache must not stop detection
+        print(f"[WARN] could not write signal cache file {path} ({exc})", flush=True)
+    return sig
+
+
 def extract_signals(
     video_path: str,
     rois: dict,
@@ -523,6 +624,7 @@ def extract_signals(
     width: int,
     verbose: bool = False,
     with_audio: bool = True,
+    cache_dir: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extract net flow, slot flow and audio RMS for one camera (see
@@ -530,17 +632,20 @@ def extract_signals(
     blocks is extracted one Recording at a time, and each result is placed at
     its start on the detection timeline, with zeros in the gaps, so both
     cameras stay aligned (hhg-38a.13).
+
+    cache_dir: when set, each Recording's signals are kept there and used
+    again while its input files and settings are unchanged (hhg-3r5.77).
     """
     blocks = _recording_blocks(video_path) if video_path.endswith(".txt") else []
     if len(blocks) < 2:
-        return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)
+        return _cached_single_signals(video_path, None, "", rois, fps, width, verbose, with_audio, cache_dir)
     placed = []
     for start, files in blocks:
         header = ["ffconcat version 1.0"] + ([f"# seek {-start:.3f}"] if start < 0 else [])
         tmp = write_temp_manifest(header + files, os.path.dirname(os.path.abspath(video_path)), "recording_")
         try:
             placed.append((int(round(max(start, 0.0) * fps)),
-                           _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)))
+                           _cached_single_signals(tmp, header + files, os.path.dirname(os.path.abspath(video_path)), rois, fps, width, verbose, with_audio, cache_dir)))
         finally:
             _remove_temp_manifest(tmp)
     n = max(i + len(sig[0]) for i, sig in placed)

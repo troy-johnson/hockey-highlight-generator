@@ -15,6 +15,10 @@ opencv-python>=4.13.0
 numpy>=2.5.0
 scipy>=1.18.0
 
+# V3 hockeyrecap progress display (v3/scripts/hockeyrecap.py). The command
+# falls back to plain text output when rich is not installed.
+rich>=15.0.0
+
 # Test runner
 pytest>=9.1.1
 

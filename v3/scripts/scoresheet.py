@@ -41,13 +41,37 @@ MAX_PERIOD_S = 25 * 60          # no League period is longer; used only to flag 
 # Finding the photo
 # ---------------------------------------------------------------------------
 
+# Files that are never a Scoresheet: pipeline outputs, editor exports,
+# thumbnails and stills from earlier runs (hhg-3r5.28). Names are matched
+# case-insensitively on the file name only.
+NON_SHEET_PATTERNS = [re.compile(p, re.IGNORECASE) for p in (
+    r"^rois_preview\.png$",
+    r"^scoresheet_",
+    r"^recap.*\.(png|jpe?g)$",
+    r"^yt_thumb.*",
+    r"^still .*",
+    r".*_overlay\.(png|jpe?g)$",
+    r"^markers\..*",
+    r"^events\.csv$",
+    r"^cam\d+\.mp4$",
+    r"^(GOPR|GP|G[XH])\d+.*\.jpe?g$",   # GoPro photos from the camera card
+)]
+
+
+def is_non_sheet_file(name: str) -> bool:
+    """True for files that must never be read as a Scoresheet or GameSheet."""
+    return name.startswith(".") or any(p.match(name) for p in NON_SHEET_PATTERNS)
+
+
 def find_scoresheet_photos(game_folder: str) -> list[str]:
-    """Image files in the Game Folder that are not pipeline outputs, largest first."""
+    """Image files in the Game Folder that can be a Scoresheet photo, largest first.
+
+    Only the top level is scanned, so folders such as editprep/ are ignored.
+    """
     root = Path(game_folder)
     photos = [p for p in root.iterdir()
               if p.is_file() and p.suffix.lower() in PHOTO_EXT and p.name not in PIPELINE_IMAGES
-              and not p.name.startswith("scoresheet_")
-              and not p.name.startswith(".")]
+              and not is_non_sheet_file(p.name)]
     return [str(p) for p in sorted(photos, key=lambda p: -p.stat().st_size)]
 
 
@@ -530,7 +554,7 @@ def read_scoresheet(photo: str, work_dir: str) -> dict:
 def find_scoresheet_pdfs(game_folder: str) -> list[str]:
     """PDF files in the Game Folder (a GameSheet export is exact, so it is tried before a photo)."""
     return sorted(str(p) for p in Path(game_folder).iterdir()
-                  if p.is_file() and p.suffix.lower() == ".pdf" and not p.name.startswith("."))
+                  if p.is_file() and p.suffix.lower() == ".pdf" and not is_non_sheet_file(p.name))
 
 
 def main(game_folder: str) -> int:
@@ -551,7 +575,12 @@ def main(game_folder: str) -> int:
             return 2
         crops = Path(game_folder) / "scoresheet_crops"
         crops.mkdir(exist_ok=True)
-        sheet = read_scoresheet(photos[0], str(crops))
+        try:
+            sheet = read_scoresheet(photos[0], str(crops))
+        except ImportError as e:
+            print(f"[scoresheet] Scoresheet reader needs the optional ML stack "
+                  f"(requirements-ml.txt): {e}", flush=True)
+            return 4
     (Path(game_folder) / "game_sheet.json").write_text(json.dumps(sheet, indent=2))
     rows = sheet["goals"]["home"] + sheet["goals"]["away"] + sheet["penalties"]["home"] + sheet["penalties"]["away"]
     review = sum(r["status"] == "review" for r in rows)
