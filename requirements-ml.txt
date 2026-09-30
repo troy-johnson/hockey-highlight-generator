@@ -1,0 +1,9 @@
+# Optional ML stack (V3 Phase 2): HockeyAI goal-frame detection for automatic ROIs.
+# Install on top of requirements.txt:  pip install -r requirements-ml.txt
+#
+# HockeyAI weights (SimulaMet-HOST/HockeyAI) are MIT; they download on first use
+# to ~/.cache/hockey-highlight-generator/ (override with HHG_HOCKEYAI_WEIGHTS).
+# The Ultralytics runtime is AGPL-3.0: fine for local use; a commercial product
+# would need an ONNX export or another runtime (see Beads hhg-x56).
+# Without this stack, run_detect.sh falls back to the interactive ROI picker.
+ultralytics>=8.4

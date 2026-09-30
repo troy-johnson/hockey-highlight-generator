@@ -86,7 +86,14 @@ if [ "$MODE" = "folder" ]; then
   echo "Cam1 manifest: $CAM1"
   echo "Cam2 manifest: $CAM2"
 
-  # Run ROI picker if missing
+  # Find the ROIs automatically from the goal frame (optional ML stack, requirements-ml.txt)
+  if [ ! -f "$ROIS" ]; then
+    echo ""
+    echo "[INFO] rois.json not found. Detecting ROIs from the goal frame..."
+    python "$SCRIPTS_V3/auto_roi.py" "$PROJECT_DIR" || echo "[WARN] Automatic ROIs failed; falling back to the ROI picker."
+  fi
+
+  # Run ROI picker if still missing
   if [ ! -f "$ROIS" ]; then
     ROI_CAM1=$(python - "$CHAPTERS_JSON" <<'PY'
 import json, sys
