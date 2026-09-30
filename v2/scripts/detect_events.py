@@ -380,15 +380,18 @@ def save_debug_plot(
 # Main
 # ---------------------------------------------------------------------------
 
-def extract_both(cam1: str, cam2: str, rois: dict, fps: int, width: int, verbose: bool, with_audio: bool = True):
+def extract_both(cam1: str, cam2: str, rois: dict, fps: int, width: int, verbose: bool, with_audio: bool = True,
+                 cache_dir: str | None = None):
     """Extract both cameras' signals, in parallel processes unless HHG_PARALLEL=0.
-    Each camera needs about one core for flow plus the decoder, so two run side by side."""
+    Each camera needs about one core for flow plus the decoder, so two run side by side.
+    cache_dir: keep signals per Recording there for fast reruns (hhg-3r5.77)."""
     jobs = [(cam1, rois["camera_1"]), (cam2, rois["camera_2"])]
+    kw = {"cache_dir": cache_dir} if cache_dir else {}
     if os.environ.get("HHG_PARALLEL", "1") == "0":
-        return tuple(extract_signals(p, r, fps, width, verbose, with_audio) for p, r in jobs)
+        return tuple(extract_signals(p, r, fps, width, verbose, with_audio, **kw) for p, r in jobs)
     from concurrent.futures import ProcessPoolExecutor
     with ProcessPoolExecutor(2) as ex:
-        futures = [ex.submit(extract_signals, p, r, fps, width, verbose, with_audio) for p, r in jobs]
+        futures = [ex.submit(extract_signals, p, r, fps, width, verbose, with_audio, **kw) for p, r in jobs]
         return tuple(f.result() for f in futures)
 
 
@@ -442,6 +445,8 @@ def main() -> None:
                     help="scoring weight: rebound activity (default 0.25)")
     ap.add_argument("--w_drop", type=float, default=0.20,
                     help="scoring weight: post-peak signal drop (default 0.20)")
+    ap.add_argument("--signal_cache", default=None, metavar="DIR",
+                    help="Keep signals per Recording in DIR and use them again while inputs and settings are unchanged")
     ap.add_argument("--debug_plot", action="store_true",
                     help="save a PNG of the fused signal with detected peaks "
                          "(saved alongside --out_csv)")
@@ -467,6 +472,7 @@ def main() -> None:
     (net1, slot1, audio1), (net2, slot2, audio2) = extract_both(
         args.cam1, args.cam2, rois, args.fps, args.width, verbose,
         with_audio=args.audio_weight > 0,
+        cache_dir=args.signal_cache,
     )
     log(f"[INFO] Signal extraction done in {time.time() - t0:.1f}s", verbose)
 
