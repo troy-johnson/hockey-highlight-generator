@@ -50,7 +50,7 @@ def test_main_fails_without_goal_so_picker_runs(tmp_path, monkeypatch):
 
 def test_run_detect_tries_auto_roi_before_picker():
     script = (Path(__file__).resolve().parents[1] / "run_detect.sh").read_text()
-    assert script.index("auto_roi.py") < script.index("roi_picker.py")
+    assert script.index("auto_roi.py") < script.index("run_roi_picker \"$ROI_CAM1\"")
 
 
 # Review findings (GPT-6.1 review of #20)
