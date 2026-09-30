@@ -1,7 +1,15 @@
 # tests/test_signals_concat.py
 import subprocess
 from unittest.mock import MagicMock
+import pytest
+import signals as _signals
 from signals import _ffmpeg_gray_frames
+
+
+@pytest.fixture(autouse=True)
+def _software_decode(monkeypatch):
+    # These tests check the command shape; keep the one-time VideoToolbox probe out of the Popen mocks.
+    monkeypatch.setattr(_signals, "_videotoolbox_available", lambda: False)
 
 
 def _make_popen_mock():
@@ -191,7 +199,7 @@ def test_extract_signals_places_recording_blocks(tmp_path, monkeypatch):
     m.write_text("ffconcat version 1.0\n# recording -2.000\nfile '/b/R1.MP4'\n# recording 10.000\nfile '/b/R2.MP4'\n")
     seen = []
 
-    def fake_single(path, rois, fps, width, verbose=False):
+    def fake_single(path, rois, fps, width, verbose=False, with_audio=True):
         text = open(path).read(); seen.append(text)
         n = 60 if "R1" in text else 24          # R1: 5 s after its 2 s seek, R2: 2 s (12 fps)
         v = 1.0 if "R1" in text else 2.0

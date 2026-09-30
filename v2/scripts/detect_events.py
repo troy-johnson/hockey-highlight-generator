@@ -380,6 +380,18 @@ def save_debug_plot(
 # Main
 # ---------------------------------------------------------------------------
 
+def extract_both(cam1: str, cam2: str, rois: dict, fps: int, width: int, verbose: bool, with_audio: bool = True):
+    """Extract both cameras' signals, in parallel processes unless HHG_PARALLEL=0.
+    Each camera needs about one core for flow plus the decoder, so two run side by side."""
+    jobs = [(cam1, rois["camera_1"]), (cam2, rois["camera_2"])]
+    if os.environ.get("HHG_PARALLEL", "1") == "0":
+        return tuple(extract_signals(p, r, fps, width, verbose, with_audio) for p, r in jobs)
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(2) as ex:
+        futures = [ex.submit(extract_signals, p, r, fps, width, verbose, with_audio) for p, r in jobs]
+        return tuple(f.result() for f in futures)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="V2 hockey highlight detection (optical flow + audio RMS)"
@@ -450,15 +462,11 @@ def main() -> None:
     rois = load_rois(args.rois)
 
     # ── Extract signals ──────────────────────────────────────────────────────
-    log("[INFO] Extracting signals from cam1...", verbose)
+    log("[INFO] Extracting signals from both cameras...", verbose)
     t0 = time.time()
-    net1, slot1, audio1 = extract_signals(
-        args.cam1, rois["camera_1"], args.fps, args.width, verbose
-    )
-
-    log("[INFO] Extracting signals from cam2...", verbose)
-    net2, slot2, audio2 = extract_signals(
-        args.cam2, rois["camera_2"], args.fps, args.width, verbose
+    (net1, slot1, audio1), (net2, slot2, audio2) = extract_both(
+        args.cam1, args.cam2, rois, args.fps, args.width, verbose,
+        with_audio=args.audio_weight > 0,
     )
     log(f"[INFO] Signal extraction done in {time.time() - t0:.1f}s", verbose)
 
