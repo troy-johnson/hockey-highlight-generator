@@ -96,3 +96,44 @@ def test_empty_folder_exits(tmp_path):
 def test_nonexistent_folder_raises(tmp_path):
     with pytest.raises(ValueError, match="Game folder not found"):
         discover(str(tmp_path / "does_not_exist"))
+
+
+def test_old_output_videos_are_not_camera_files(tmp_path):
+    folder = _setup(tmp_path, cam1_files=["GX010017.MP4", "cam1.mp4"], cam2_files=["GX010038.MP4", "recap.mp4"])
+    (tmp_path / "cam1" / ".GX019999.MP4").touch()
+    result = discover(folder)
+    assert [Path(p).name for p in result["cam1"]] == ["GX010017.MP4"]
+    assert [Path(p).name for p in result["cam2"]] == ["GX010038.MP4"]
+
+
+def test_is_old_output_video():
+    assert _D.is_old_output_video("cam1.mp4")
+    assert _D.is_old_output_video("CAM2.MP4")
+    assert _D.is_old_output_video("highlights_final.mp4")
+    assert _D.is_old_output_video("goal_overlay.mp4")
+    assert not _D.is_old_output_video("GX010017.MP4")
+
+
+def test_non_strict_accepts_one_camera(tmp_path):
+    folder = _setup(tmp_path, cam1_files=["GX010017.MP4"])
+    result = discover(folder, strict=False)
+    assert [Path(p).name for p in result["cam1"]] == ["GX010017.MP4"]
+    assert "cam2" not in result or not result.get("cam2")
+    assert result["flags"]
+
+
+def test_non_strict_all_black_camera_is_a_flag(tmp_path, monkeypatch):
+    folder = _setup(tmp_path, cam1_files=["GX010017.MP4"], cam2_files=["GX010038.MP4"])
+    monkeypatch.setattr(_D, "is_black_recording", lambda rec: "GX010038" in rec[0])
+    result = discover(folder, strict=False)
+    assert "cam2" in result["missing"]
+    assert any("cam2" in f for f in result["flags"])
+    with pytest.raises(ValueError):
+        discover(folder)                     # strict mode keeps the old error
+
+
+def test_non_strict_no_usable_camera_raises(tmp_path, monkeypatch):
+    folder = _setup(tmp_path, cam1_files=["GX010017.MP4"], cam2_files=["GX010038.MP4"])
+    monkeypatch.setattr(_D, "is_black_recording", lambda rec: True)
+    with pytest.raises(ValueError, match="No usable camera"):
+        discover(folder, strict=False)

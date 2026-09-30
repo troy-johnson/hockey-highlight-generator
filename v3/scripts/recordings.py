@@ -75,16 +75,20 @@ def _duration(path: str) -> float:
     return float(out) if out else 0.0
 
 
-def is_black_recording(recording: list[str]) -> bool:
+def sample_lumas(recording: list[str], fractions, durations: list[float] | None = None
+                 ) -> list[tuple[float, float]]:
     """
-    True when every frame sampled across the Recording is nearly black (lens
-    covered the whole time). A Recording that is dark for a while and then shows
-    play is kept: the dark part simply has no motion.
+    Mean luma (0..255) of one small frame at each fraction (0..1) of the
+    Recording's total length. Returns (seconds into the Recording, luma) for
+    each frame that could be read.
     """
-    durations = [_duration(p) for p in recording]
+    if durations is None:
+        durations = [_duration(p) for p in recording]
     total = sum(durations)
-    lumas = []
-    for t in np.linspace(0.05, 0.95, BLACK_SAMPLES) * total:
+    out = []
+    for f in fractions:
+        t = t_rec = float(f) * total
+        path = recording[-1]
         for path, d in zip(recording, durations):
             if t <= d:
                 break
@@ -92,5 +96,15 @@ def is_black_recording(recording: list[str]) -> bool:
         raw = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t:.1f}", "-i", path, "-frames:v", "1",
                               "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "pipe:1"], capture_output=True).stdout
         if raw:
-            lumas.append(float(np.frombuffer(raw, np.uint8).mean()))
+            out.append((t_rec, float(np.frombuffer(raw, np.uint8).mean())))
+    return out
+
+
+def is_black_recording(recording: list[str]) -> bool:
+    """
+    True when every frame sampled across the Recording is nearly black (lens
+    covered the whole time). A Recording that is dark for a while and then shows
+    play is kept: the dark part simply has no motion.
+    """
+    lumas = [luma for _, luma in sample_lumas(recording, np.linspace(0.05, 0.95, BLACK_SAMPLES))]
     return bool(lumas) and max(lumas) < BLACK_MEAN_LUMA
