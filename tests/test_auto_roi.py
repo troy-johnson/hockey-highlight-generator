@@ -103,3 +103,15 @@ def test_first_download_loads_from_a_pt_name_and_ends_on_the_final_path(tmp_path
     A._model()
     assert target.exists() and loaded[-1] == str(target)
     assert not [p for p in tmp_path.iterdir() if p != target]
+
+
+def test_source_dims_parses_real_ffprobe9_output_with_stream_groups(monkeypatch):
+    """Real HERO12 files: ffprobe 9 also lists stream groups (found in the end-to-end run)."""
+    real = ('{"programs": [], "stream_groups": [{"streams": [{"width": 3840, "height": 2160}]}],'
+            ' "streams": [{"width": 3840, "height": 2160}]}')
+
+    class R:
+        stdout = real
+
+    monkeypatch.setattr(A.subprocess, "run", lambda cmd, **kw: R())
+    assert A._source_dims("/x/GX010008.MP4") == (3840, 2160)

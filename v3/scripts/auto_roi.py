@@ -65,10 +65,12 @@ def pick_goal_box(dets: list[tuple[str, float, tuple]]) -> tuple[tuple, float] |
 
 
 def _source_dims(path: str) -> tuple[int, int]:
+    """(width, height) of the first video stream. JSON output: ffprobe 9 also lists
+    stream groups, which made the plain-text output span several lines."""
     out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-                          "-of", "csv=p=0:s=x", path], capture_output=True, text=True).stdout.strip()
-    w, h = out.split("x")[:2]
-    return int(w), int(h)
+                          "-of", "json", path], capture_output=True, text=True).stdout
+    stream = json.loads(out)["streams"][0]
+    return int(stream["width"]), int(stream["height"])
 
 
 def analysis_size(path: str, width: int = WIDTH) -> tuple[int, int]:
