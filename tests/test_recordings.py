@@ -77,3 +77,41 @@ def test_all_black_camera_is_an_error(tmp_path, monkeypatch):
     monkeypatch.setattr(D, "is_black_recording", lambda rec: Path(rec[0]).name == "GX010007.MP4")
     with pytest.raises(ValueError, match="no usable"):
         D.discover(_flat(tmp_path, list(serial)))
+
+
+# ---------------------------------------------------------------------------
+# Review findings (GPT-6.1 review of #18)
+# ---------------------------------------------------------------------------
+
+import recordings as R
+
+
+def test_invalid_first_casn_does_not_hide_a_valid_serial(tmp_path):
+    f = tmp_path / "GX010008.MP4"
+    bad = b"CASN" + bytes.fromhex("6301000f") + b"\0" * 15          # empty payload
+    good = b"CASN" + bytes.fromhex("6301000f") + b"C3504250147247\0"
+    f.write_bytes(b"\0" * 100 + bad + b"\0" * 100 + good + b"\0" * 100)
+    assert read_camera_serial(str(f)) == "C3504250147247"
+
+
+def _fake_frames(monkeypatch, lumas):
+    it = iter(lumas)
+    def fake_run(cmd, **kw):
+        class P: pass
+        p = P()
+        if cmd[0] == "ffprobe":
+            p.stdout = "600.0\n"
+        else:
+            p.stdout = bytes([next(it)]) * (64 * 36)
+        return p
+    monkeypatch.setattr(R.subprocess, "run", fake_run)
+
+
+def test_mixed_dark_and_bright_recording_is_kept(monkeypatch):
+    _fake_frames(monkeypatch, [3, 3, 3, 3, 3, 3, 120, 130, 125])
+    assert R.is_black_recording(["/x/GX010001.MP4"]) is False
+
+
+def test_consistently_dark_recording_is_black(monkeypatch):
+    _fake_frames(monkeypatch, [3] * 9)
+    assert R.is_black_recording(["/x/GX010001.MP4"]) is True

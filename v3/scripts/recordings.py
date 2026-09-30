@@ -19,8 +19,9 @@ import numpy as np
 
 _NAME = re.compile(r"^G[XH](\d{2})(\d{4})\.MP4$", re.IGNORECASE)
 _SCAN_BYTES = 8_000_000
+_SERIAL = re.compile(r"^[A-Z0-9]{8,24}$")
 BLACK_MEAN_LUMA = 16.0      # 0..255; a covered lens reads well below this
-BLACK_SAMPLES = 5
+BLACK_SAMPLES = 9          # every sample must be dark: covered-then-uncovered footage is kept
 
 
 def parse_gopro_name(name: str) -> tuple[int, int] | None:
@@ -51,14 +52,16 @@ def read_camera_serial(path: str) -> str | None:
             chunks.append(f.read())
     for data in chunks:
         i = data.find(b"CASN")
-        if i < 0 or i + 8 > len(data):
-            continue
-        # GPMF key: 4-byte key, type char, sample size, repeat count (big-endian 16 bit)
-        sample_size, repeat = data[i + 5], int.from_bytes(data[i + 6:i + 8], "big")
-        raw = data[i + 8:i + 8 + sample_size * repeat]
-        serial = raw.split(b"\0", 1)[0].decode("ascii", "ignore").strip()
-        if serial:
-            return serial
+        while 0 <= i and i + 8 <= len(data):
+            # GPMF key: 4-byte key, type char 'c', sample size, repeat count (big-endian 16 bit)
+            type_char, sample_size = data[i + 4], data[i + 5]
+            repeat = int.from_bytes(data[i + 6:i + 8], "big")
+            if type_char == ord("c") and sample_size == 1:
+                raw = data[i + 8:i + 8 + repeat]
+                serial = raw.split(b"\0", 1)[0].decode("ascii", "ignore").strip()
+                if _SERIAL.match(serial):
+                    return serial
+            i = data.find(b"CASN", i + 4)             # invalid match: keep searching
     return None
 
 
@@ -69,13 +72,21 @@ def _duration(path: str) -> float:
 
 
 def is_black_recording(recording: list[str]) -> bool:
-    """True when frames sampled across the Recording are nearly black (lens covered)."""
+    """
+    True when every frame sampled across the Recording is nearly black (lens
+    covered the whole time). A Recording that is dark for a while and then shows
+    play is kept: the dark part simply has no motion.
+    """
+    durations = [_duration(p) for p in recording]
+    total = sum(durations)
     lumas = []
-    for path in recording:
-        d = _duration(path)
-        for t in np.linspace(0.1, 0.9, max(1, BLACK_SAMPLES // len(recording) + 1)) * d:
-            raw = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t:.1f}", "-i", path, "-frames:v", "1",
-                                  "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "pipe:1"], capture_output=True).stdout
-            if raw:
-                lumas.append(float(np.frombuffer(raw, np.uint8).mean()))
-    return bool(lumas) and float(np.median(lumas)) < BLACK_MEAN_LUMA
+    for t in np.linspace(0.05, 0.95, BLACK_SAMPLES) * total:
+        for path, d in zip(recording, durations):
+            if t <= d:
+                break
+            t -= d
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t:.1f}", "-i", path, "-frames:v", "1",
+                              "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "pipe:1"], capture_output=True).stdout
+        if raw:
+            lumas.append(float(np.frombuffer(raw, np.uint8).mean()))
+    return bool(lumas) and max(lumas) < BLACK_MEAN_LUMA

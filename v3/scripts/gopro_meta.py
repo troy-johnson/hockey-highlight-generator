@@ -121,7 +121,7 @@ def _check_chapter_continuity(
     return warnings
 
 
-def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str]) -> dict:
+def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str], max_offset_s: float | None = 60.0) -> dict:
     """
     Compute camera alignment offset from chapter metadata.
     Probes all chapters for continuity checks.
@@ -138,7 +138,7 @@ def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str]) -> dict:
     if abs(raw_offset) < 0.1:
         raw_offset = 0.0
 
-    if abs(raw_offset) > 60.0:
+    if max_offset_s is not None and abs(raw_offset) > max_offset_s:
         raise ValueError(
             f"[ERROR] Sync offset {raw_offset:.1f}s is implausibly large — "
             "likely a metadata error. Check GoPro timecode sync."
@@ -231,7 +231,18 @@ def main(game_folder: str) -> None:
     chapters = json.loads(chapters_path.read_text())
 
     print("[gopro_meta] Extracting timecodes...", flush=True)
-    sync = compute_sync(chapters["cam1"], chapters["cam2"])
+    # The cameras' clocks are checked on each camera's earliest Recording, including
+    # skipped black ones: both cameras are started together, so a large difference
+    # there is a metadata error. The kept footage may start minutes apart when a
+    # covered-lens Recording was skipped, which is allowed.
+    skipped = {cam: [e["path"] for e in chapters.get("excluded", []) if e.get("cam") == cam] for cam in ("cam1", "cam2")}
+    if any(skipped.values()):
+        earliest = {cam: min([chapters[cam][0]] + skipped[cam], key=lambda p: extract_chapter_time(p)[0])
+                    for cam in ("cam1", "cam2")}
+        compute_sync([earliest["cam1"]], [earliest["cam2"]])    # raises on an implausible clock offset
+        sync = compute_sync(chapters["cam1"], chapters["cam2"], max_offset_s=None)
+    else:
+        sync = compute_sync(chapters["cam1"], chapters["cam2"])
 
     # GoPro timecode is each camera's own clock; check it against rink audio (hhg-38a.12).
     print("[gopro_meta] Checking sync against rink audio...", flush=True)

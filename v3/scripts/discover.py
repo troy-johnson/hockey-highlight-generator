@@ -71,7 +71,7 @@ def discover(game_folder: str) -> dict:
         kept = []
         for rec in group_recordings(files):
             if is_black_recording(rec):
-                result["excluded"].append({"path": rec[0], "reason": "black"})
+                result["excluded"].append({"path": rec[0], "reason": "black", "cam": cam})
             else:
                 kept.append(rec)
         if not kept:

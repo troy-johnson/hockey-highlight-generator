@@ -353,3 +353,37 @@ def test_main_writes_recording_blocks(tmp_path):
     cam2 = (tmp_path / "cam2_concat.txt").read_text()
     assert "# recording 0.000" in cam2 and "# recording 1500.000" in cam2
     assert "# recording" not in (tmp_path / "cam1_concat.txt").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Review finding (GPT-6.1 review of #18): black exclusion must not trip the 60 s clock check
+# ---------------------------------------------------------------------------
+
+def test_main_allows_large_start_difference_when_clocks_agree(tmp_path):
+    import gopro_meta
+    chapters = {"cam1": ["/a/A2.MP4"], "cam2": ["/b/B1.MP4"],
+                "recordings": {"cam1": [["/a/A2.MP4"]], "cam2": [["/b/B1.MP4"]]},
+                "excluded": [{"path": "/a/A1.MP4", "reason": "black", "cam": "cam1"}]}
+    (tmp_path / "chapters.json").write_text(json.dumps(chapters))
+    times = {"/a/A1.MP4": 1000.0, "/a/A2.MP4": 1600.0, "/b/B1.MP4": 1000.0}
+    seen = {}
+
+    def fake_verify(sync, a, b):
+        seen["offset"] = sync["offset_s"]
+        return sync
+
+    with patch("gopro_meta.extract_chapter_time", side_effect=lambda p: (times[p], "timecode", "tc", 600.0)), \
+         patch("gopro_meta.verify_sync_with_audio", side_effect=fake_verify):
+        gopro_meta.main(str(tmp_path))
+    assert seen["offset"] == -600.0                     # cam1's kept footage starts 600 s after cam2's
+    assert "# seek 600.000" in (tmp_path / "cam2_concat.txt").read_text()
+
+
+def test_main_still_rejects_disagreeing_clocks(tmp_path):
+    import gopro_meta
+    chapters = {"cam1": ["/a/A1.MP4"], "cam2": ["/b/B1.MP4"]}
+    (tmp_path / "chapters.json").write_text(json.dumps(chapters))
+    times = {"/a/A1.MP4": 1000.0, "/b/B1.MP4": 1300.0}
+    with patch("gopro_meta.extract_chapter_time", side_effect=lambda p: (times[p], "timecode", "tc", 600.0)):
+        with pytest.raises(ValueError, match="implausibly large"):
+            gopro_meta.main(str(tmp_path))

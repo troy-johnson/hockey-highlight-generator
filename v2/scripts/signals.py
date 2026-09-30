@@ -448,12 +448,8 @@ def extract_signals(
         return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose)
     placed = []
     for start, files in blocks:
-        fd, tmp = tempfile.mkstemp(prefix="recording_", suffix=".txt")
-        with os.fdopen(fd, "w") as f:
-            f.write("ffconcat version 1.0\n")
-            if start < 0:
-                f.write(f"# seek {-start:.3f}\n")
-            f.write("\n".join(files) + "\n")
+        header = ["ffconcat version 1.0"] + ([f"# seek {-start:.3f}"] if start < 0 else [])
+        tmp = write_temp_manifest(header + files, os.path.dirname(os.path.abspath(video_path)), "recording_")
         placed.append((int(round(max(start, 0.0) * fps)), _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose)))
     n = max(i + len(sig[0]) for i, sig in placed)
     out = [np.zeros(n, dtype=np.float32) for _ in range(3)]
