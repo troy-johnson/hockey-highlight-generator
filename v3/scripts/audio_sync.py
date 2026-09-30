@@ -137,8 +137,13 @@ def verify_sync_with_audio(sync: dict, cam1_first: str | list[str], cam2_first: 
     sync = dict(sync)
     sync["warnings"] = list(sync.get("warnings", []))
     sync["timecode_offset_s"] = sync["offset_s"]
+    # Read each camera from where the footage overlaps by timecode, so the +/-MAX_OFFSET_S
+    # search is centred on the timecode offset (starts can differ by minutes when a
+    # covered-lens Recording is skipped); the measured lag is a correction to it.
+    base = sync["offset_s"]
     try:
-        r = measure_offset(load_audio(cam1_first), load_audio(cam2_first))
+        r = measure_offset(load_audio(cam1_first, start=max(base, 0.0)), load_audio(cam2_first, start=max(-base, 0.0)))
+        r = dict(r, offset_s=round(base + r["offset_s"], 3))
     except Exception as exc:  # no audio, unreadable file: keep timecode, flag it
         sync["warnings"].append(f"[WARN] Sync audio check failed ({exc}); using {sync['sync_method']}")
         return sync

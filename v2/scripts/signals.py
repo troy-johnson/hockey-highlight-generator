@@ -120,6 +120,16 @@ def cleanup_temp_manifests() -> None:
 atexit.register(cleanup_temp_manifests)
 
 
+def _remove_temp_manifest(path: str) -> None:
+    """Delete one temporary manifest now instead of at exit."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    if path in _TEMP_MANIFESTS:
+        _TEMP_MANIFESTS.remove(path)
+
+
 def write_temp_manifest(lines: list[str], base_dir: str, prefix: str) -> str:
     """
     Write a temporary concat manifest. Relative 'file' entries are resolved
@@ -325,7 +335,7 @@ def extract_audio_rms(video_path: str, fps: int, n_frames: int) -> np.ndarray:
 # Main public interface
 # ---------------------------------------------------------------------------
 
-def extract_signals(
+def _extract_single_signals(
     video_path: str,
     rois: dict,
     fps: int,
@@ -414,3 +424,50 @@ def extract_signals(
         )
 
     return net_flow, slot_flow, audio_rms
+
+
+def _recording_blocks(manifest: str) -> list[tuple[float, list[str]]]:
+    """Parse '# recording <start>' blocks of a concat manifest (empty if none)."""
+    blocks: list[tuple[float, list[str]]] = []
+    with open(manifest) as f:
+        for line in f.read().splitlines():
+            parts = line.strip().split()
+            if parts[:2] == ["#", "recording"] and len(parts) == 3:
+                blocks.append((float(parts[2]), []))
+            elif blocks and line.strip().startswith("file "):
+                blocks[-1][1].append(line.strip())
+    return blocks
+
+
+def extract_signals(
+    video_path: str,
+    rois: dict,
+    fps: int,
+    width: int,
+    verbose: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Extract net flow, slot flow and audio RMS for one camera (see
+    _extract_single_signals). A manifest with several '# recording <start>'
+    blocks is extracted one Recording at a time, and each result is placed at
+    its start on the detection timeline, with zeros in the gaps, so both
+    cameras stay aligned (hhg-38a.13).
+    """
+    blocks = _recording_blocks(video_path) if video_path.endswith(".txt") else []
+    if len(blocks) < 2:
+        return _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose)
+    placed = []
+    for start, files in blocks:
+        header = ["ffconcat version 1.0"] + ([f"# seek {-start:.3f}"] if start < 0 else [])
+        tmp = write_temp_manifest(header + files, os.path.dirname(os.path.abspath(video_path)), "recording_")
+        try:
+            placed.append((int(round(max(start, 0.0) * fps)),
+                           _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose)))
+        finally:
+            _remove_temp_manifest(tmp)
+    n = max(i + len(sig[0]) for i, sig in placed)
+    out = [np.zeros(n, dtype=np.float32) for _ in range(3)]
+    for i, sig in placed:
+        for k in range(3):
+            out[k][i:i + len(sig[k])] = sig[k]
+    return out[0], out[1], out[2]

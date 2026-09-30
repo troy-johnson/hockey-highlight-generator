@@ -194,18 +194,24 @@ def _place_clips_dual_track(
 
 
 def _resolve_assemble(resolve, game_folder: str, events: list[Event], sync_info: dict) -> None:
-    for cam in ("cam1", "cam2"):
-        cam_dir = Path(game_folder) / cam
-        if not cam_dir.is_dir():
-            print(f"Missing required folder: {cam_dir}")
-            raise SystemExit(1)
-
+    # Chapter paths come from chapters.json, so flat Game Folders work too (no cam1/ cam2/).
     chapters_path = Path(game_folder) / "chapters.json"
     if not chapters_path.is_file():
         print(f"Missing required file: {chapters_path}")
         raise SystemExit(1)
 
     chapters = json.loads(chapters_path.read_text(encoding="utf-8"))
+    for path in chapters.get("cam1", []) + chapters.get("cam2", []):
+        if not Path(path).is_file():
+            print(f"Missing chapter file: {path}")
+            raise SystemExit(1)
+    # Assembly maps events through contiguous chapter durations; the gap between
+    # Recordings would misplace clips. Resolve is an optional finisher (spec 002).
+    for cam, recs in chapters.get("recordings", {}).items():
+        if len(recs) > 1:
+            print(f"[compile_reel] {cam} has several Recordings; Resolve assembly supports one Recording "
+                  "per camera. Use the rendered Recap instead.")
+            raise SystemExit(1)
 
     pm = resolve.GetProjectManager()
     if pm is None:

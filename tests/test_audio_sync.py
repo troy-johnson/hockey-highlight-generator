@@ -62,7 +62,8 @@ def test_verify_negative_audio_offset_skips_cam2():
 
 
 def test_verify_keeps_timecode_when_audio_agrees():
-    with patch("audio_sync.measure_offset", return_value={"offset_s": 2.2, "confident": True, "n_agree": 5, "n_windows": 5}), \
+    # measure_offset returns the correction on top of the timecode offset (audio read from the overlap)
+    with patch("audio_sync.measure_offset", return_value={"offset_s": 0.2, "confident": True, "n_agree": 5, "n_windows": 5}), \
          patch("audio_sync.load_audio", return_value=np.zeros(10, np.float32)):
         s = verify_sync_with_audio(_timecode_sync(2.0), "/a.MP4", "/b.MP4")
     assert s["sync_method"] == "timecode+audio"
@@ -124,3 +125,15 @@ def test_load_audio_reads_a_recording_as_one_stream(monkeypatch, tmp_path):
     assert cmd.index("-ss") < cmd.index("-f") < cmd.index("-i")
     assert cmd[cmd.index("-ss") + 1] == "600.000"
     assert "file '/r/GX010001.MP4'" in manifest and "file '/r/GX020001.MP4'" in manifest
+
+
+
+def test_verify_searches_around_a_large_timecode_offset():
+    """Audio is read from where the cameras overlap, so offsets beyond the +/-60 s search still verify."""
+    loads = []
+    with patch("audio_sync.load_audio", side_effect=lambda path, seconds=700.0, start=0.0: loads.append((path, start)) or np.zeros(10, np.float32)), \
+         patch("audio_sync.measure_offset", return_value={"offset_s": 0.3, "confident": True, "n_agree": 8, "n_windows": 9}):
+        s = verify_sync_with_audio(_timecode_sync(-600.0), "/a.MP4", "/b.MP4")
+    assert ("/b.MP4", 600.0) in loads and ("/a.MP4", 0.0) in loads
+    assert s["audio_offset_s"] == pytest.approx(-599.7)
+    assert s["sync_method"] == "timecode+audio"

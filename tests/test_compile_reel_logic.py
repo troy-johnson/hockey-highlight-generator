@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -419,41 +420,48 @@ def test_main_calls_resolve_assemble_with_selected_events_and_sync_info(monkeypa
     assert sync_info_arg == sync_info
 
 
-def test_resolve_assemble_exits_when_cam1_folder_missing(capsys, tmp_path):
+class _NoProjectManager:
+    def GetProjectManager(self):
+        return None
+
+
+def test_resolve_assemble_accepts_flat_folder(capsys, tmp_path):
+    """A flat Game Folder (no cam1/ cam2/) passes validation via chapters.json (review of #18)."""
+    for name in ("A.MP4", "B.MP4"):
+        (tmp_path / name).touch()
+    (tmp_path / "chapters.json").write_text(json.dumps({
+        "cam1": [str(tmp_path / "A.MP4")], "cam2": [str(tmp_path / "B.MP4")],
+        "recordings": {"cam1": [[str(tmp_path / "A.MP4")]], "cam2": [[str(tmp_path / "B.MP4")]]}}))
+    with pytest.raises(SystemExit):
+        _resolve_assemble(resolve=_NoProjectManager(), game_folder=str(tmp_path), events=[],
+                          sync_info={"cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0})
+    assert "No project manager" in capsys.readouterr().out
+
+
+def test_resolve_assemble_exits_when_chapter_file_missing(capsys, tmp_path):
+    (tmp_path / "chapters.json").write_text(json.dumps({"cam1": [str(tmp_path / "gone.MP4")], "cam2": []}))
     with pytest.raises(SystemExit) as exc_info:
-        _resolve_assemble(
-            resolve=object(),
-            game_folder=str(tmp_path),
-            events=[],
-            sync_info={"cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0},
-        )
-
+        _resolve_assemble(resolve=_NoProjectManager(), game_folder=str(tmp_path), events=[],
+                          sync_info={"cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0})
     assert exc_info.value.code == 1
-    output = capsys.readouterr().out
-    assert "Missing required folder" in output
-    assert "cam1" in output
+    assert "Missing chapter file" in capsys.readouterr().out
 
 
-def test_resolve_assemble_exits_when_cam2_folder_missing(capsys, tmp_path):
-    (tmp_path / "cam1").mkdir()
-
+def test_resolve_assemble_refuses_several_recordings(capsys, tmp_path):
+    """Resolve assembly maps events through contiguous chapters; gaps between Recordings would misplace clips."""
+    for name in ("A1.MP4", "A2.MP4", "B.MP4"):
+        (tmp_path / name).touch()
+    (tmp_path / "chapters.json").write_text(json.dumps({
+        "cam1": [str(tmp_path / "A1.MP4"), str(tmp_path / "A2.MP4")], "cam2": [str(tmp_path / "B.MP4")],
+        "recordings": {"cam1": [[str(tmp_path / "A1.MP4")], [str(tmp_path / "A2.MP4")]], "cam2": [[str(tmp_path / "B.MP4")]]}}))
     with pytest.raises(SystemExit) as exc_info:
-        _resolve_assemble(
-            resolve=object(),
-            game_folder=str(tmp_path),
-            events=[],
-            sync_info={"cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0},
-        )
-
+        _resolve_assemble(resolve=_NoProjectManager(), game_folder=str(tmp_path), events=[],
+                          sync_info={"cam1_detect_offset_s": 0.0, "cam2_detect_offset_s": 0.0})
     assert exc_info.value.code == 1
-    output = capsys.readouterr().out
-    assert "Missing required folder" in output
-    assert "cam2" in output
+    assert "several Recordings" in capsys.readouterr().out
 
 
 def test_resolve_assemble_exits_when_chapters_json_missing(capsys, tmp_path):
-    (tmp_path / "cam1").mkdir()
-    (tmp_path / "cam2").mkdir()
 
     with pytest.raises(SystemExit) as exc_info:
         _resolve_assemble(
@@ -482,6 +490,10 @@ def _setup_game_folder(tmp_path, cam1_files=None, cam2_files=None):
         "cam1": cam1_files or [str(tmp_path / "cam1" / "GOPRO1801.MP4")],
         "cam2": cam2_files or [str(tmp_path / "cam2" / "GOPRO1901.MP4")],
     }
+    for path in chapters["cam1"] + chapters["cam2"]:
+        if str(path).startswith(str(tmp_path)):
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).touch()
     (tmp_path / "chapters.json").write_text(json.dumps(chapters), encoding="utf-8")
     return chapters
 
