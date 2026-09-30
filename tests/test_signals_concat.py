@@ -166,3 +166,15 @@ def test_temporary_manifests_are_removed_by_cleanup(tmp_path):
     assert __import__("os").path.exists(tmp)
     signals.cleanup_temp_manifests()
     assert not __import__("os").path.exists(tmp)
+
+
+def test_dimension_probe_resolves_relative_manifest_paths(tmp_path, monkeypatch):
+    """Second review of #17: the probe must not depend on the process's working directory."""
+    import signals
+    m = tmp_path / "cam1_concat.txt"
+    m.write_text("ffconcat version 1.0\nfile 'chapters/A.MP4'\n")
+    probed = []
+    monkeypatch.setattr(signals, "ffprobe_dims", lambda p: probed.append(p) or (1920, 1080))
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **k: _make_popen_mock())
+    gen, w, h = signals._ffmpeg_gray_frames(str(m), fps=12, width=640)
+    assert probed == [str(tmp_path / "chapters" / "A.MP4")]

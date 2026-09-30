@@ -16,7 +16,9 @@ minus cam1 start, so cam1_audio(t + offset_s) == cam2_audio(t).
 """
 from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
 
 import numpy as np
 from scipy import signal
@@ -35,11 +37,28 @@ MIN_PEAK = 0.15           # a window's correlation peak must reach this to count
 EDGE_S = 0.5              # a peak this close to the edge of the search range is not a measurement
 
 
-def load_audio(path: str, seconds: float = LOAD_S) -> np.ndarray:
-    """Decode the first `seconds` of mono audio at SR as float32."""
-    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-t", f"{seconds:.1f}", "-i", path,
+def load_audio(path: str | list[str], seconds: float = LOAD_S, start: float = 0.0) -> np.ndarray:
+    """
+    Decode `seconds` of mono audio at SR as float32, from `start` seconds into a
+    file or into a Recording given as its list of chapters (read as one stream,
+    so a seek past the first chapter lands in the next one).
+    """
+    paths = [path] if isinstance(path, str) else list(path)
+    manifest = None
+    if len(paths) > 1:
+        fd, manifest = tempfile.mkstemp(prefix="audio_sync_", suffix=".txt")
+        with os.fdopen(fd, "w") as f:
+            f.write("ffconcat version 1.0\n" + "".join(f"file '{os.path.abspath(p)}'\n" for p in paths))
+        source = ["-f", "concat", "-safe", "0", "-i", manifest]
+    else:
+        source = ["-i", paths[0]]
+    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{start:.3f}", "-t", f"{seconds:.1f}", *source,
            "-vn", "-ac", "1", "-ar", str(SR), "-f", "f32le", "pipe:1"]
-    raw = subprocess.run(cmd, check=True, capture_output=True).stdout
+    try:
+        raw = subprocess.run(cmd, check=True, capture_output=True).stdout
+    finally:
+        if manifest:
+            os.remove(manifest)
     if not raw:
         raise RuntimeError(f"No audio decoded from {path}")
     return np.frombuffer(raw, dtype=np.float32).copy()
@@ -107,7 +126,7 @@ def _apply_offset(sync: dict, offset: float) -> None:
     sync["cam2_detect_offset_s"] = -offset if offset < 0 else 0.0
 
 
-def verify_sync_with_audio(sync: dict, cam1_first: str, cam2_first: str) -> dict:
+def verify_sync_with_audio(sync: dict, cam1_first: str | list[str], cam2_first: str | list[str]) -> dict:
     """
     Check a timecode-based sync dict against rink audio and return it updated.
 

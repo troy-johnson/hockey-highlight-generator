@@ -100,3 +100,27 @@ def test_lags_at_the_search_edge_are_rejected(monkeypatch):
     monkeypatch.setattr(A, "_ncc", lambda region, q: np.concatenate([[1.0], np.zeros(len(region) - len(q))]))
     cam1, cam2 = _pair(5.0)
     assert not A.measure_offset(cam1, cam2)["confident"]
+
+
+# Second review of #17: audio is read across a Recording's chapters, not only its first file.
+
+def test_load_audio_reads_a_recording_as_one_stream(monkeypatch, tmp_path):
+    import audio_sync as A
+    captured = []
+
+    class R:
+        stdout = np.zeros(8, np.float32).tobytes()
+
+    def fake_run(cmd, **kw):
+        captured.append(cmd)
+        if "-f" in cmd and "concat" in cmd:
+            manifest = cmd[cmd.index("-i") + 1]
+            captured.append(open(manifest).read())
+        return R()
+
+    monkeypatch.setattr(A.subprocess, "run", fake_run)
+    A.load_audio(["/r/GX010001.MP4", "/r/GX020001.MP4"], seconds=10, start=600.0)
+    cmd, manifest = captured
+    assert cmd.index("-ss") < cmd.index("-f") < cmd.index("-i")
+    assert cmd[cmd.index("-ss") + 1] == "600.000"
+    assert "file '/r/GX010001.MP4'" in manifest and "file '/r/GX020001.MP4'" in manifest

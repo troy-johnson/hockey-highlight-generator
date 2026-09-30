@@ -187,6 +187,8 @@ def _ffmpeg_gray_frames(
                 line = line.strip()
                 if line.startswith("file "):
                     first_file = line[5:].strip("'\"")
+                    if not os.path.isabs(first_file):     # ffmpeg resolves entries against the manifest's folder
+                        first_file = os.path.join(os.path.dirname(os.path.abspath(video_path)), first_file)
                     break
         if first_file is None:
             raise RuntimeError(f"No file entries found in concat manifest: {video_path}")
