@@ -25,6 +25,20 @@ strip_quotes() {
   echo "$p"
 }
 
+# The ROI picker is an OpenCV window. Run it only when a person started the
+# command in a terminal; an unattended run (scheduled, NAS watcher) would hang.
+# HOCKEY_UNATTENDED=1 forces unattended behavior.
+run_roi_picker() {
+  if [ "${HOCKEY_UNATTENDED:-0}" = "1" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+    echo "[ERROR] No rois.json in $(dirname "$3"), and this run is unattended, so the ROI picker cannot open."
+    echo "[ERROR] Pick the ROIs, then run again:"
+    echo "  python \"$SCRIPTS/roi_picker.py\" \"$1\" \"$2\" --out \"$3\""
+    exit 2
+  fi
+  echo "[INFO] Launching ROI picker..."
+  python "$SCRIPTS/roi_picker.py" "$1" "$2" --out "$3"
+}
+
 usage() {
   echo "Usage:"
   echo "  run_detect.sh                # uses current folder as project folder"
@@ -90,7 +104,7 @@ if [ "$MODE" = "folder" ]; then
   if [ ! -f "$ROIS" ]; then
     echo ""
     echo "[INFO] rois.json not found. Detecting ROIs from the goal frame..."
-    python "$SCRIPTS_V3/auto_roi.py" "$PROJECT_DIR" || echo "[WARN] Automatic ROIs failed; falling back to the ROI picker."
+    python "$SCRIPTS_V3/auto_roi.py" "$PROJECT_DIR" || echo "[WARN] Automatic ROIs failed; falling back to the ROI picker (interactive runs only)."
   fi
 
   # Run ROI picker if still missing
@@ -111,11 +125,8 @@ PY
 )
 
     echo ""
-    echo "[INFO] rois.json not found. Launching ROI picker..."
-    python "$SCRIPTS/roi_picker.py" \
-      "$ROI_CAM1" \
-      "$ROI_CAM2" \
-      --out "$ROIS"
+    echo "[INFO] rois.json not found."
+    run_roi_picker "$ROI_CAM1" "$ROI_CAM2" "$ROIS"
 
     if [ ! -f "$ROIS" ]; then
       echo "[ERROR] ROI picker did not create: $ROIS"
@@ -148,11 +159,8 @@ if [ "$MODE" = "files" ]; then
 
   if [ ! -f "$ROIS" ]; then
     echo ""
-    echo "[INFO] rois.json not found in output folder. Launching ROI picker..."
-    python "$SCRIPTS/roi_picker.py" \
-      "$CAM1" \
-      "$CAM2" \
-      --out "$ROIS"
+    echo "[INFO] rois.json not found in output folder."
+    run_roi_picker "$CAM1" "$CAM2" "$ROIS"
 
     if [ ! -f "$ROIS" ]; then
       echo "[ERROR] ROI picker did not create: $ROIS"
