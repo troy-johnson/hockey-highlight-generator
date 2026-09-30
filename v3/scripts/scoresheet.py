@@ -31,6 +31,7 @@ MODEL = "mlx-community/Qwen3-VL-8B-Instruct-4bit"
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".heic"}
 PIPELINE_IMAGES = {"rois_preview.png"}
 GOAL_TYPES = ("ES", "PP", "SH", "EN", "PS")
+GOAL_TYPE_ALIASES = {"EV": "ES", "EQ": "ES"}  # forms write even strength as EV
 MAX_PERIOD_S = 25 * 60          # no League period is longer; used only to flag impossible times
 
 # ---------------------------------------------------------------------------
@@ -303,6 +304,7 @@ def _edit_distance(a: str, b: str) -> int:
 def normalize_goal_type(v) -> tuple[str, bool]:
     """Nearest valid goal type ('BP' -> 'PP'); True when it had to be changed."""
     s = _clean(v).upper()
+    s = GOAL_TYPE_ALIASES.get(s, s)
     if s in GOAL_TYPES or s == "":
         return s, False
     best = min(GOAL_TYPES, key=lambda t: _edit_distance(s, t))
@@ -314,6 +316,19 @@ def split_assists(v) -> list[str]:
     if s in ("", "-", "--", "NONE"):
         return []
     return [p for p in re.split(r"[-,/]", s) if p]
+
+
+def normalize_minutes(v) -> str:
+    """'2:00' / '2.00' -> '2'; other values unchanged."""
+    s = _clean(v)
+    t = parse_time(s)
+    return str(t // 60) if t is not None and t % 60 == 0 else s
+
+
+def period_cell(v) -> str:
+    """A SCORE BY PERIODS cell: a handwritten zero often reads as 'D' or 'O'."""
+    s = _clean(v)
+    return "0" if s.upper() in ("D", "O", "Ø") else s
 
 
 def _period_key(v) -> str:
@@ -368,7 +383,7 @@ def check_penalties(pens: list[dict], roster: dict[str, str], opp_goals: list[di
         per = _period_key(p.get("per"))
         if per not in ("1", "2", "3", "OT"):
             reasons.append(f"period '{p.get('per')}' is not 1, 2, 3 or OT")
-        mins = _clean(p.get("minutes"))
+        mins = normalize_minutes(p.get("minutes"))
         if mins not in ("2", "4", "5", "10"):
             reasons.append(f"minutes '{p.get('minutes')}' is not 2, 4, 5 or 10")
         num = _clean(p.get("player"))
@@ -410,7 +425,7 @@ def check_score_by_periods(periods: dict, home_goals: list[dict], away_goals: li
     """Compare goal rows per period with the SCORE BY PERIODS table; returns flags."""
     flags = []
     for side, goals in (("home", home_goals), ("away", away_goals)):
-        cells = [(_clean(c)) for c in (periods.get(side) or [])]
+        cells = [period_cell(c) for c in (periods.get(side) or [])]
         for i, per in enumerate(("1", "2", "3")):
             counted = sum(1 for g in goals if g["per"] == per)
             written = cells[i] if i < len(cells) else ""
@@ -427,8 +442,8 @@ def compare_periods(first: dict, second: dict) -> list[str]:
     flags = []
     cols = ("1", "2", "3", "OT", "TOTAL")
     for side in ("home", "away"):
-        a = [_clean(c) for c in (first.get(side) or [])]
-        b = [_clean(c) for c in (second.get(side) or [])]
+        a = [period_cell(c) for c in (first.get(side) or [])]
+        b = [period_cell(c) for c in (second.get(side) or [])]
         for i, col in enumerate(cols):
             va, vb = (a[i] if i < len(a) else ""), (b[i] if i < len(b) else "")
             if va != vb:
@@ -503,7 +518,8 @@ def read_scoresheet(photo: str, work_dir: str) -> dict:
         "rosters": rosters,
         "goals": goals,
         "penalties": penalties,
-        "score_by_periods": periods,
+        "score_by_periods": {side: [period_cell(c) for c in (periods.get(side) or [])] for side in ("home", "away")}
+        if isinstance(periods, dict) else {},
         "flags": flags,
     }
 

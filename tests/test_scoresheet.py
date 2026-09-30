@@ -27,6 +27,26 @@ def test_normalize_goal_type():
     assert ss.normalize_goal_type("es") == ("ES", False)
     assert ss.normalize_goal_type("BP") == ("PP", True)
     assert ss.normalize_goal_type("") == ("", False)
+    assert ss.normalize_goal_type("ev") == ("ES", False)
+
+
+def test_normalize_minutes():
+    assert ss.normalize_minutes("2:00") == "2"
+    assert ss.normalize_minutes("10.00") == "10"
+    assert ss.normalize_minutes("2") == "2"
+    assert ss.normalize_minutes("7:30") == "7:30"
+
+
+def test_period_cell_reads_d_as_zero():
+    assert ss.period_cell("D") == "0"
+    assert ss.period_cell(" 2 ") == "2"
+    assert ss.period_cell("") == ""
+
+
+def test_check_penalties_accepts_minutes_written_as_clock():
+    rows = ss.check_penalties([{"per": "1", "player": "7", "infraction": "TRIP", "minutes": "2:00",
+                                "off": "11:18", "start": "11:18", "on": "9:18"}], {"7": "A"})
+    assert rows[0]["status"] == "ok" and rows[0]["minutes"] == "2"
 
 
 def test_split_assists():
