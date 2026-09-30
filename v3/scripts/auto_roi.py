@@ -119,16 +119,17 @@ def _model():
             # Download to a temporary name and rename only after the weights load,
             # so an interrupted download never leaves a broken cache behind.
             WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            part = WEIGHTS_PATH.with_name(WEIGHTS_PATH.name + ".part")
+            # The temporary name must end in '.pt': Ultralytics loads a checkpoint only from a '.pt' path.
+            part = WEIGHTS_PATH.with_name(WEIGHTS_PATH.stem + ".part.pt")
             print(f"[auto_roi] Downloading HockeyAI weights to {WEIGHTS_PATH}", flush=True)
             try:
                 urllib.request.urlretrieve(WEIGHTS_URL, part)
-                model = YOLO(str(part))
+                YOLO(str(part))                     # validate before it becomes the cached copy
             except BaseException:
                 part.unlink(missing_ok=True)
                 raise
             part.replace(WEIGHTS_PATH)
-            _MODEL = model
+            _MODEL = YOLO(str(WEIGHTS_PATH))
         else:
             _MODEL = YOLO(str(WEIGHTS_PATH))
     return _MODEL

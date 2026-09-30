@@ -82,4 +82,24 @@ def test_interrupted_download_leaves_no_weights(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=Broken))
     with pytest.raises(RuntimeError):
         A._model()
-    assert not target.exists() and not list(tmp_path.glob("*.part"))
+    assert not target.exists() and not list(tmp_path.glob("*.part*"))
+
+
+def test_first_download_loads_from_a_pt_name_and_ends_on_the_final_path(tmp_path, monkeypatch):
+    """Second review of #20: Ultralytics loads a checkpoint only from a '.pt' name."""
+    target = tmp_path / "HockeyAI_model_weight.pt"
+    monkeypatch.setattr(A, "WEIGHTS_PATH", target)
+    monkeypatch.setattr(A, "_MODEL", None)
+    monkeypatch.setattr(A.urllib.request, "urlretrieve", lambda url, dest: Path(dest).write_bytes(b"weights"))
+    loaded = []
+
+    class FakeYOLO:
+        def __init__(self, path):
+            assert Path(path).suffix == ".pt" and Path(path).exists()
+            loaded.append(path)
+
+    import types, sys
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
+    A._model()
+    assert target.exists() and loaded[-1] == str(target)
+    assert not [p for p in tmp_path.iterdir() if p != target]
