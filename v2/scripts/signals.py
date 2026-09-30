@@ -120,6 +120,16 @@ def cleanup_temp_manifests() -> None:
 atexit.register(cleanup_temp_manifests)
 
 
+def _remove_temp_manifest(path: str) -> None:
+    """Delete one temporary manifest now instead of at exit."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    if path in _TEMP_MANIFESTS:
+        _TEMP_MANIFESTS.remove(path)
+
+
 def write_temp_manifest(lines: list[str], base_dir: str, prefix: str) -> str:
     """
     Write a temporary concat manifest. Relative 'file' entries are resolved
@@ -450,7 +460,11 @@ def extract_signals(
     for start, files in blocks:
         header = ["ffconcat version 1.0"] + ([f"# seek {-start:.3f}"] if start < 0 else [])
         tmp = write_temp_manifest(header + files, os.path.dirname(os.path.abspath(video_path)), "recording_")
-        placed.append((int(round(max(start, 0.0) * fps)), _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose)))
+        try:
+            placed.append((int(round(max(start, 0.0) * fps)),
+                           _extract_single_signals(tmp, rois, fps=fps, width=width, verbose=verbose)))
+        finally:
+            _remove_temp_manifest(tmp)
     n = max(i + len(sig[0]) for i, sig in placed)
     out = [np.zeros(n, dtype=np.float32) for _ in range(3)]
     for i, sig in placed:

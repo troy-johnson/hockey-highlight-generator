@@ -121,6 +121,9 @@ def _check_chapter_continuity(
     return warnings
 
 
+PLAUSIBLE_OFFSET_S = 60.0   # beyond this, an offset needs audio confirmation
+
+
 def compute_sync(cam1_chapters: list[str], cam2_chapters: list[str], max_offset_s: float | None = 60.0) -> dict:
     """
     Compute camera alignment offset from chapter metadata.
@@ -189,7 +192,13 @@ def recording_starts(recordings: list[list[str]]) -> list[float]:
     camera's clock (hhg-38a.13).
     """
     t0 = extract_chapter_time(recordings[0][0])[0]
-    return [0.0] + [round(extract_chapter_time(rec[0])[0] - t0, 3) for rec in recordings[1:]]
+    starts = [0.0]
+    for rec in recordings[1:]:
+        d = extract_chapter_time(rec[0])[0] - t0
+        if d < -43200:           # clock times are seconds since midnight: a later Recording after midnight
+            d += 86400
+        starts.append(round(d, 3))
+    return starts
 
 
 def write_concat_manifest(
@@ -231,25 +240,23 @@ def main(game_folder: str) -> None:
     chapters = json.loads(chapters_path.read_text())
 
     print("[gopro_meta] Extracting timecodes...", flush=True)
-    # The cameras' clocks are checked on each camera's earliest Recording, including
-    # skipped black ones: both cameras are started together, so a large difference
-    # there is a metadata error. The kept footage may start minutes apart when a
-    # covered-lens Recording was skipped, which is allowed.
-    skipped = {cam: [e["path"] for e in chapters.get("excluded", []) if e.get("cam") == cam] for cam in ("cam1", "cam2")}
-    if any(skipped.values()):
-        earliest = {cam: min([chapters[cam][0]] + skipped[cam], key=lambda p: extract_chapter_time(p)[0])
-                    for cam in ("cam1", "cam2")}
-        compute_sync([earliest["cam1"]], [earliest["cam2"]])    # raises on an implausible clock offset
-        sync = compute_sync(chapters["cam1"], chapters["cam2"], max_offset_s=None)
-    else:
-        sync = compute_sync(chapters["cam1"], chapters["cam2"])
+    # Kept footage may start minutes apart (a camera started late, or a covered-lens
+    # Recording was skipped). A large offset is accepted only when rink audio confirms it.
+    sync = compute_sync(chapters["cam1"], chapters["cam2"], max_offset_s=None)
 
-    # GoPro timecode is each camera's own clock; check it against rink audio (hhg-38a.12).
+    # GoPro timecode is each camera's own clock; check it against rink audio (hhg-38a.12),
+    # reading each camera's whole first kept Recording from where the footage overlaps.
     print("[gopro_meta] Checking sync against rink audio...", flush=True)
-    sync = verify_sync_with_audio(sync, chapters["cam1"][0], chapters["cam2"][0])
+    first = {cam: (chapters.get("recordings", {}).get(cam) or [chapters[cam]])[0] for cam in ("cam1", "cam2")}
+    sync = verify_sync_with_audio(sync, first["cam1"], first["cam2"])
     for w in sync["warnings"]:
         if "audio" in w:
             print(w, flush=True)
+    if "audio" not in sync["sync_method"] and abs(sync["offset_s"]) > PLAUSIBLE_OFFSET_S:
+        raise ValueError(
+            f"[ERROR] Sync offset {sync['offset_s']:.1f}s is implausibly large and rink audio could not "
+            "confirm it — likely a metadata error. Check GoPro timecode sync."
+        )
 
     sync_path = Path(game_folder) / "sync_info.json"
     sync_path.write_text(json.dumps(sync, indent=2))

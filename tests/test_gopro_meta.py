@@ -305,7 +305,7 @@ def test_main_uses_audio_checked_offset_in_manifests(tmp_path):
     with patch("gopro_meta.compute_sync", return_value=tc_sync), \
          patch("gopro_meta.verify_sync_with_audio", return_value=audio_sync) as ver:
         gopro_meta.main(str(tmp_path))
-    ver.assert_called_once_with(tc_sync, "/a/A1.MP4", "/b/B1.MP4")
+    ver.assert_called_once_with(tc_sync, ["/a/A1.MP4"], ["/b/B1.MP4"])
     info = json.loads((tmp_path / "sync_info.json").read_text())
     assert info["sync_method"] == "audio" and info["offset_s"] == 20.0
     assert "# seek 20.000" in (tmp_path / "cam1_concat.txt").read_text()
@@ -370,7 +370,7 @@ def test_main_allows_large_start_difference_when_clocks_agree(tmp_path):
 
     def fake_verify(sync, a, b):
         seen["offset"] = sync["offset_s"]
-        return sync
+        return dict(sync, sync_method="timecode+audio")     # audio confirms the large offset
 
     with patch("gopro_meta.extract_chapter_time", side_effect=lambda p: (times[p], "timecode", "tc", 600.0)), \
          patch("gopro_meta.verify_sync_with_audio", side_effect=fake_verify):
@@ -385,5 +385,42 @@ def test_main_still_rejects_disagreeing_clocks(tmp_path):
     (tmp_path / "chapters.json").write_text(json.dumps(chapters))
     times = {"/a/A1.MP4": 1000.0, "/b/B1.MP4": 1300.0}
     with patch("gopro_meta.extract_chapter_time", side_effect=lambda p: (times[p], "timecode", "tc", 600.0)):
+        with pytest.raises(ValueError, match="implausibly large"):
+            gopro_meta.main(str(tmp_path))
+
+
+# Second review of #18
+
+def test_recording_starts_unwrap_midnight():
+    import gopro_meta
+    with patch("gopro_meta.extract_chapter_time") as mock:
+        mock.side_effect = [(84600.0, "creation_time", None, 5000.0), (2700.0, "creation_time", None, 3000.0)]  # 23:30, 00:45
+        assert gopro_meta.recording_starts([["/a/1.MP4"], ["/a/2.MP4"]]) == [0.0, 4500.0]
+
+
+def test_main_accepts_staggered_starts_that_audio_confirms(tmp_path):
+    import gopro_meta
+    (tmp_path / "chapters.json").write_text(json.dumps({"cam1": ["/a/A1.MP4", "/a/A2.MP4"], "cam2": ["/b/B1.MP4"],
+        "recordings": {"cam1": [["/a/A1.MP4", "/a/A2.MP4"]], "cam2": [["/b/B1.MP4"]]}}))
+    times = {"/a/A1.MP4": 1000.0, "/a/A2.MP4": 1600.0, "/b/B1.MP4": 1120.0}
+    seen = {}
+
+    def fake_verify(sync, a, b):
+        seen["args"] = (a, b)
+        return dict(sync, sync_method="timecode+audio")
+
+    with patch("gopro_meta.extract_chapter_time", side_effect=lambda p: (times[p], "timecode", "tc", 600.0)), \
+         patch("gopro_meta.verify_sync_with_audio", side_effect=fake_verify):
+        gopro_meta.main(str(tmp_path))                  # 120 s apart: allowed once audio confirms it
+    assert seen["args"] == (["/a/A1.MP4", "/a/A2.MP4"], ["/b/B1.MP4"])   # whole first Recordings
+    assert "# seek 120.000" in (tmp_path / "cam1_concat.txt").read_text()
+
+
+def test_main_rejects_large_offset_that_audio_cannot_confirm(tmp_path):
+    import gopro_meta
+    (tmp_path / "chapters.json").write_text(json.dumps({"cam1": ["/a/A1.MP4"], "cam2": ["/b/B1.MP4"]}))
+    times = {"/a/A1.MP4": 1000.0, "/b/B1.MP4": 1300.0}
+    with patch("gopro_meta.extract_chapter_time", side_effect=lambda p: (times[p], "timecode", "tc", 600.0)), \
+         patch("gopro_meta.verify_sync_with_audio", side_effect=lambda s, a, b: dict(s, warnings=["[WARN] Sync audio check inconclusive"])):
         with pytest.raises(ValueError, match="implausibly large"):
             gopro_meta.main(str(tmp_path))

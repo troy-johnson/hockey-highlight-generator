@@ -32,14 +32,18 @@ def parse_gopro_name(name: str) -> tuple[int, int] | None:
 
 def group_recordings(paths: list[str]) -> list[list[str]]:
     """Group chapter paths into Recordings, ordered by file number then chapter.
-    Files without GoPro names form one Recording, sorted by name (older layouts)."""
-    named = [(parse_gopro_name(Path(p).name), p) for p in paths]
-    if any(key is None for key, _ in named):
-        return [sorted(paths)]
+    Files without GoPro names form one extra Recording, sorted by name (older
+    layouts); they never merge the recognized Recordings."""
     groups: dict[int, list[tuple[int, str]]] = {}
-    for (chapter, number), p in named:
-        groups.setdefault(number, []).append((chapter, p))
-    return [[p for _, p in sorted(groups[n])] for n in sorted(groups)]
+    other: list[str] = []
+    for p in paths:
+        key = parse_gopro_name(Path(p).name)
+        if key is None:
+            other.append(p)
+        else:
+            groups.setdefault(key[1], []).append((key[0], p))
+    out = [[p for _, p in sorted(groups[n])] for n in sorted(groups)]
+    return out + ([sorted(other)] if other else [])
 
 
 def read_camera_serial(path: str) -> str | None:
@@ -56,7 +60,7 @@ def read_camera_serial(path: str) -> str | None:
             # GPMF key: 4-byte key, type char 'c', sample size, repeat count (big-endian 16 bit)
             type_char, sample_size = data[i + 4], data[i + 5]
             repeat = int.from_bytes(data[i + 6:i + 8], "big")
-            if type_char == ord("c") and sample_size == 1:
+            if type_char == ord("c") and sample_size == 1 and i + 8 + repeat <= len(data):
                 raw = data[i + 8:i + 8 + repeat]
                 serial = raw.split(b"\0", 1)[0].decode("ascii", "ignore").strip()
                 if _SERIAL.match(serial):

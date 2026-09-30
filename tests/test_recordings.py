@@ -115,3 +115,14 @@ def test_mixed_dark_and_bright_recording_is_kept(monkeypatch):
 def test_consistently_dark_recording_is_black(monkeypatch):
     _fake_frames(monkeypatch, [3] * 9)
     assert R.is_black_recording(["/x/GX010001.MP4"]) is True
+
+
+def test_truncated_casn_payload_is_rejected(tmp_path):
+    f = tmp_path / "GX010008.MP4"
+    f.write_bytes(b"\0" * 50 + b"CASN" + bytes.fromhex("63010064") + b"C12345678901")   # declares 100 bytes, file ends
+    assert read_camera_serial(str(f)) is None
+
+
+def test_unrecognized_names_do_not_merge_recognized_recordings():
+    paths = ["/x/GX010007.MP4", "/x/GX010008.MP4", "/x/GX020008.MP4", "/x/GOPRO1801.MP4"]
+    assert group_recordings(paths) == [["/x/GX010007.MP4"], ["/x/GX010008.MP4", "/x/GX020008.MP4"], ["/x/GOPRO1801.MP4"]]

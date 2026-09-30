@@ -203,3 +203,14 @@ def test_extract_signals_places_recording_blocks(tmp_path, monkeypatch):
     assert "# seek" not in seen[1] and "R2" in seen[1]
     assert len(net) == 10 * 12 + 24
     assert net[:60].tolist() == [1.0] * 60 and net[60:120].tolist() == [0.0] * 60 and net[120:].tolist() == [2.0] * 24
+
+
+def test_recording_block_manifests_are_removed_after_extraction(tmp_path, monkeypatch):
+    import numpy as np, os, signals
+    m = tmp_path / "cam2_concat.txt"
+    m.write_text("ffconcat version 1.0\n# recording 0.000\nfile '/b/R1.MP4'\n# recording 10.000\nfile '/b/R2.MP4'\n")
+    used = []
+    monkeypatch.setattr(signals, "_extract_single_signals",
+                        lambda path, rois, fps, width, verbose=False, **kw: used.append(path) or (np.zeros(2, np.float32),) * 3)
+    signals.extract_signals(str(m), {}, fps=12, width=640)
+    assert len(used) == 2 and not any(os.path.exists(p) for p in used)
