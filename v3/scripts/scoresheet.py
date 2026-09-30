@@ -15,6 +15,9 @@ Output: game_sheet.json in the Game Folder. Every goal and penalty row has
 "status": "ok" or "review", with "reasons". The Game Sheet is a claim to
 verify against the video (CONTEXT.md), never ground truth.
 
+A GameSheet PDF export in the Game Folder is read instead, exactly, by
+gamesheet_pdf.py (no model).
+
 Needs the optional ML stack (requirements-ml.txt): mlx-vlm, pyobjc Vision.
 Runs on Apple Silicon only. No API key and no per-game cost.
 """
@@ -524,14 +527,31 @@ def read_scoresheet(photo: str, work_dir: str) -> dict:
     }
 
 
+def find_scoresheet_pdfs(game_folder: str) -> list[str]:
+    """PDF files in the Game Folder (a GameSheet export is exact, so it is tried before a photo)."""
+    return sorted(str(p) for p in Path(game_folder).iterdir()
+                  if p.is_file() and p.suffix.lower() == ".pdf" and not p.name.startswith("."))
+
+
 def main(game_folder: str) -> int:
-    photos = find_scoresheet_photos(game_folder)
-    if not photos:
-        print("[scoresheet] No Scoresheet photo in the Game Folder; the Game Sheet must be entered in review", flush=True)
-        return 2
-    crops = Path(game_folder) / "scoresheet_crops"
-    crops.mkdir(exist_ok=True)
-    sheet = read_scoresheet(photos[0], str(crops))
+    sheet = None
+    for pdf in find_scoresheet_pdfs(game_folder):
+        sys.path.insert(0, str(Path(__file__).parent))
+        from gamesheet_pdf import read_gamesheet_pdf
+        try:
+            sheet = read_gamesheet_pdf(pdf)
+            break
+        except ValueError as e:
+            print(f"[scoresheet] {Path(pdf).name}: {e}", flush=True)
+    if sheet is None:
+        photos = find_scoresheet_photos(game_folder)
+        if not photos:
+            print("[scoresheet] No Scoresheet photo or GameSheet PDF in the Game Folder; "
+                  "the Game Sheet must be entered in review", flush=True)
+            return 2
+        crops = Path(game_folder) / "scoresheet_crops"
+        crops.mkdir(exist_ok=True)
+        sheet = read_scoresheet(photos[0], str(crops))
     (Path(game_folder) / "game_sheet.json").write_text(json.dumps(sheet, indent=2))
     rows = sheet["goals"]["home"] + sheet["goals"]["away"] + sheet["penalties"]["home"] + sheet["penalties"]["away"]
     review = sum(r["status"] == "review" for r in rows)
