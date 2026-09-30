@@ -23,13 +23,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover import _cameras_from_flat_folder, _cameras_from_folders  # noqa: E402
-from recordings import BLACK_MEAN_LUMA, group_recordings, sample_lumas  # noqa: E402
+from gopro_meta import CHAPTER_GAP_S  # noqa: E402
+from recordings import BLACK_MEAN_LUMA, BLACK_SAMPLES, group_recordings, sample_lumas  # noqa: E402
 
 REPORT_FILE = "recording_check.json"
 SAMPLE_EVERY_S = 120.0      # one sampled frame per 2 minutes of footage
-MIN_SAMPLES = 9             # the same count discover.py uses for a black Recording
+MIN_SAMPLES = BLACK_SAMPLES  # the same count recordings.py uses for a black Recording
 MAX_SAMPLES = 30            # per Recording, so a check takes a few minutes
-GAP_S = 5.0                 # the chapter continuity limit of gopro_meta.py
+GAP_S = CHAPTER_GAP_S       # the chapter continuity limit of gopro_meta.py
 EARLY_S = 120.0             # a camera that ends this much before the other "stopped early"
 
 

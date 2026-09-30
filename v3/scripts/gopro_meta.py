@@ -95,12 +95,15 @@ def extract_chapter_time(chapter_path: str) -> tuple[float, str, str | None, flo
     raise ValueError(f"[ERROR] No usable timecode or creation_time metadata in {chapter_path}")
 
 
+CHAPTER_GAP_S = 5.0  # a larger gap or overlap between chapters is a warning
+
+
 def _check_chapter_continuity(
     chapter_metas: list[tuple[float, str, str | None, float]],
     cam_name: str,
 ) -> list[str]:
     """
-    Check for timestamp gaps or overlaps > 5s between consecutive chapters.
+    Check for timestamp gaps or overlaps > CHAPTER_GAP_S between consecutive chapters.
     Returns warning strings; also prints each one.
     """
     warnings: list[str] = []
@@ -110,7 +113,7 @@ def _check_chapter_continuity(
         if prev_dur <= 0:
             continue
         gap = curr_start - (prev_start + prev_dur)
-        if abs(gap) > 5.0:
+        if abs(gap) > CHAPTER_GAP_S:
             direction = "gap" if gap > 0 else "overlap"
             msg = (
                 f"[WARN] {cam_name} chapter {i + 1}: "

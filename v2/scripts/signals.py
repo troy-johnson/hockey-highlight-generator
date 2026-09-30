@@ -522,14 +522,25 @@ def _recording_blocks(manifest: str) -> list[tuple[float, list[str]]]:
 # ---------------------------------------------------------------------------
 # One .npz file per Recording keeps the three signal arrays (a few hundred KB
 # per hour of footage). No frames or proxies are cached. The key holds the
-# identity (path, size, mtime) of every input file and every setting that
-# changes the signals. Increase SIGNALS_VERSION when the extraction changes.
+# identity (path, size, mtime) of every input file, every setting that
+# changes the signals, the decode path, and a hash of this file, so a change
+# to the extraction code makes the old entries unused.
 
 SIGNALS_VERSION = 1
+_CODE_HASH: str | None = None
+
+
+def _code_hash() -> str:
+    """Hash of signals.py; a code change gives new cache keys."""
+    global _CODE_HASH
+    if _CODE_HASH is None:
+        with open(os.path.abspath(__file__), "rb") as f:
+            _CODE_HASH = hashlib.sha256(f.read()).hexdigest()[:16]
+    return _CODE_HASH
 
 
 def _manifest_inputs(lines: list[str], base_dir: str) -> tuple[list[str], float]:
-    """Input file paths and '# seek' value of manifest lines."""
+    """Input file paths and seek value of manifest lines ('# seek' or a legacy 'inpoint')."""
     files: list[str] = []
     seek = 0.0
     for line in lines:
@@ -537,6 +548,8 @@ def _manifest_inputs(lines: list[str], base_dir: str) -> tuple[list[str], float]
         parts = t.split()
         if parts[:2] == ["#", "seek"] and len(parts) == 3:
             seek = float(parts[2])
+        elif parts[:1] == ["inpoint"] and len(parts) == 2:
+            seek = float(parts[1])
         elif t.startswith("file "):
             path = t[5:].strip().strip("'\"")
             files.append(path if os.path.isabs(path) else os.path.join(base_dir, path))
@@ -545,7 +558,7 @@ def _manifest_inputs(lines: list[str], base_dir: str) -> tuple[list[str], float]
 
 def _file_identity(path: str) -> list:
     st = os.stat(path)
-    return [os.path.abspath(path), st.st_size, int(st.st_mtime)]
+    return [os.path.abspath(path), st.st_size, st.st_mtime_ns]
 
 
 def signal_cache_key(files: list[str], seek: float, rois: dict, fps: int, width: int,
@@ -555,6 +568,8 @@ def signal_cache_key(files: list[str], seek: float, rois: dict, fps: int, width:
         return [r.x, r.y, r.w, r.h] if isinstance(r, ROI) else r
     payload = {
         "version": SIGNALS_VERSION,
+        "code": _code_hash(),
+        "hwaccel": _use_hwaccel(),
         "files": [_file_identity(f) for f in files],
         "seek": round(seek, 3),
         "rois": {k: roi(v) for k, v in sorted(rois.items())},
@@ -592,10 +607,13 @@ def _cached_single_signals(video_path: str, lines: list[str] | None, base_dir: s
         except Exception as exc:  # damaged cache file: compute again
             print(f"[WARN] signal cache file {path} unreadable ({exc}); computing again", flush=True)
     sig = _extract_single_signals(video_path, rois, fps=fps, width=width, verbose=verbose, with_audio=with_audio)
-    os.makedirs(cache_dir, exist_ok=True)
     tmp = path + ".tmp.npz"
-    np.savez(tmp, net=sig[0], slot=sig[1], audio=sig[2])
-    os.replace(tmp, path)
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        np.savez(tmp, net=sig[0], slot=sig[1], audio=sig[2])
+        os.replace(tmp, path)
+    except OSError as exc:  # the cache must not stop detection
+        print(f"[WARN] could not write signal cache file {path} ({exc})", flush=True)
     return sig
 
 

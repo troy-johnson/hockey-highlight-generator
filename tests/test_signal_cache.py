@@ -95,3 +95,30 @@ def test_cache_key_changes_with_seek_and_audio(tmp_path):
     assert k == S.signal_cache_key([str(f)], 0.0, ROIS, 12, 1280, False)
     assert k != S.signal_cache_key([str(f)], 1.5, ROIS, 12, 1280, False)
     assert k != S.signal_cache_key([str(f)], 0.0, ROIS, 12, 1280, True)
+
+
+def test_cache_key_reads_legacy_inpoint(tmp_path):
+    f = tmp_path / "a.MP4"
+    f.write_bytes(b"x")
+    files, seek = S._manifest_inputs(["ffconcat version 1.0", "file 'a.MP4'", "inpoint 2.5"], str(tmp_path))
+    assert seek == 2.5 and files == [str(f)]
+    files0, seek0 = S._manifest_inputs(["ffconcat version 1.0", "file 'a.MP4'", "inpoint 0.5"], str(tmp_path))
+    assert S.signal_cache_key(files, seek, ROIS, 12, 1280, False) != \
+        S.signal_cache_key(files0, seek0, ROIS, 12, 1280, False)
+
+
+def test_cache_key_changes_with_signals_code(tmp_path, monkeypatch):
+    f = tmp_path / "a.MP4"
+    f.write_bytes(b"x")
+    k = S.signal_cache_key([str(f)], 0.0, ROIS, 12, 1280, False)
+    monkeypatch.setattr(S, "_code_hash", lambda: "other")
+    assert k != S.signal_cache_key([str(f)], 0.0, ROIS, 12, 1280, False)
+
+
+def test_unwritable_cache_does_not_break_extraction(tmp_path, fake_extract, monkeypatch):
+    m = _game(tmp_path)
+    def fail(*a, **k):
+        raise OSError("read-only")
+    monkeypatch.setattr(S.np, "savez", fail)
+    net, slot, audio = S.extract_signals(str(m), ROIS, 1, 640, cache_dir=str(tmp_path / "cache"))
+    assert len(net) > 0 and len(fake_extract) == 2

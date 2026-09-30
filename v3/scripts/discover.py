@@ -11,8 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from recordings import group_recordings, is_black_recording, read_camera_serial  # noqa: E402
 
 # Old pipeline or editor outputs that can sit next to the camera files
-# (for example Resolve renders named cam1.mp4). They are not camera footage.
-_OLD_OUTPUT_VIDEO = re.compile(r"^(cam\d+|recap.*|highlights?.*|.*_overlay)\.mp4$", re.IGNORECASE)
+# (for example Resolve renders named cam1.mp4, or the planned recap output
+# YYYY-MM-DD_Team-vs-Opponent_Recap.mp4). They are not camera footage.
+_OLD_OUTPUT_VIDEO = re.compile(r"^(cam\d+|(.*_)?recap.*|(.*_)?highlights?.*|.*_overlay)\.mp4$", re.IGNORECASE)
 
 
 def is_old_output_video(name: str) -> bool:
@@ -58,16 +59,19 @@ def _cameras_from_flat_folder(root: Path, strict: bool, excluded: list[dict]
     if "unknown" in by_serial and len(by_serial) > 1:
         for p in by_serial.pop("unknown"):
             excluded.append({"path": p, "reason": "no camera serial", "cam": None})
-    if not strict:
-        if len(by_serial) > 2:
-            keep = sorted(by_serial, key=lambda s: _size(by_serial[s]), reverse=True)[:2]
-            for s in [s for s in by_serial if s not in keep]:
-                for p in by_serial.pop(s):
-                    excluded.append({"path": p, "reason": f"extra camera {s}", "cam": None})
-    elif len(by_serial) != 2:
+    if strict and len(by_serial) != 2:
+        no_serial = [Path(e["path"]).name for e in excluded if e["reason"] == "no camera serial"]
         raise ValueError(f"[ERROR] Expected 2 cameras in the Game Folder, found {len(by_serial)} "
-                         f"(camera serials: {sorted(by_serial)})")
+                         f"(camera serials: {sorted(by_serial)})"
+                         + (f"; {len(no_serial)} file(s) without a camera serial were ignored: "
+                            f"{', '.join(no_serial)}" if no_serial else ""))
     serials = sorted(by_serial)
+    if len(serials) > 2:
+        # More than two cameras (for example a bench-glass camera): keep all of
+        # them. The two with the most footage become cam1 and cam2, the
+        # cameras that detection uses; discover() flags the choice.
+        main = sorted(sorted(by_serial, key=lambda s: _size(by_serial[s]), reverse=True)[:2])
+        serials = main + [s for s in serials if s not in main]
     cams = {f"cam{i + 1}": by_serial[s] for i, s in enumerate(serials)}
     return cams, {f"cam{i + 1}": s for i, s in enumerate(serials)}
 
@@ -88,7 +92,9 @@ def discover(game_folder: str, strict: bool = True) -> dict:
       cam1 / cam2      kept chapter paths in order (used by existing tools)
       recordings       {cam: [[chapter paths of one Recording], ...]} (kept only)
       serials          {cam: camera serial or None}
-      excluded         [{"path": first chapter, "reason": "black", "cam": cam}]
+      excluded         [{"path": first chapter, "reason": "black", "cam": cam}],
+                       or {"path", "reason": "no camera serial", "cam": None}
+      cam3 ...         only when a flat folder has more than two cameras (flagged)
       missing / flags  cameras with no usable Recording, and why (strict=False)
     """
     root = Path(game_folder)
@@ -108,6 +114,10 @@ def discover(game_folder: str, strict: bool = True) -> dict:
         if cam not in cams:
             result["missing"].append(cam)
             result["flags"].append(f"{cam}: no footage found")
+    if len(cams) > 2:
+        extra = [f"{c} (serial {serials.get(c)})" for c in cams if c not in ("cam1", "cam2")]
+        result["flags"].append(f"found {len(cams)} cameras: detection uses cam1 and cam2 (most footage), "
+                               f"not {', '.join(extra)}; check that cam1 and cam2 are the net cameras")
     for cam, files in cams.items():
         kept = []
         for rec in group_recordings(files):
@@ -131,11 +141,12 @@ def discover(game_folder: str, strict: bool = True) -> dict:
 
 
 if __name__ == "__main__":
+    allow_missing = "--allow-missing-camera" in sys.argv[1:]
     args = [a for a in sys.argv[1:] if a != "--allow-missing-camera"]
     if len(args) != 1:
         sys.exit("Usage: discover.py <game_folder> [--allow-missing-camera]")
     try:
-        chapters = discover(args[0], strict="--allow-missing-camera" not in sys.argv)
+        chapters = discover(args[0], strict=not allow_missing)
         for cam, recs in chapters["recordings"].items():
             print(f"[discover] {cam}: {len(chapters[cam])} chapters in {len(recs)} Recording(s)"
                   + (f", serial {chapters['serials'][cam]}" if chapters["serials"].get(cam) else ""))

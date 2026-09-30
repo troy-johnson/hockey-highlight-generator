@@ -12,10 +12,17 @@ Audio is explicitly disabled — no crowd noise in amateur games.
 `hockeydetect` → `run_detect.sh` at the project root. **Do not move run_detect.sh.**
 The alias is defined on the user's machine and points to this file by absolute path.
 
+`hockeyrecap` → `run_recap.sh` at the project root (runs `v3/scripts/hockeyrecap.py`
+with `.venv/bin/python`). **Do not move run_recap.sh.** Same alias convention.
+
 ## Active code
 
 - **`v2/scripts/`** — detection engine (optical flow + rolling threshold). Active, do not break.
 - **`v3/scripts/`** — V3 chapter discovery (`discover.py`) and timecode sync (`gopro_meta.py`). Complete.
+- **`v3/scripts/hockeyrecap.py`** — `hockeyrecap run|status|rerun --from|check` CLI.
+  Stage runner in `recap_runner.py`, option layers (League, Team Config in
+  `~/hockey/`, per-game file, CLI flags) in `recap_options.py`, Recording check
+  in `recap_check.py`. Stages call the existing scripts as subprocesses.
 - **`v3/resolve_scripts/`** — V3 Resolve reel assembly (`compile_reel.py`). Complete.
 - **`v1/`** — read-only archive. Do not modify.
 
@@ -60,14 +67,25 @@ and skips black Recordings (lens covered).
 ```
 game_folder/
   GX01xxxx.MP4 ...   ← raw GoPro chapters from both cameras (or cam1/ cam2/)
-  chapters.json      ← cameras, Recordings, serials, excluded (discover.py)
+  chapters.json      ← cameras, Recordings, serials, excluded, missing, flags (discover.py)
+                       cam3+ only when more than 2 cameras (hockeyrecap mode)
   sync_info.json     ← offset from timecode, checked against rink audio (gopro_meta.py)
   cam1_concat.txt    ← ffconcat manifest; offsets as '# seek' / '# recording' comments
   cam2_concat.txt
   rois.json          ← automatic (auto_roi.py) or from roi_picker.py
   rois_auto.json     ← goal box + confidence per camera; rois_preview.png
   events.csv / markers.csv
+  recap_options.json ← per-game options (hockeyrecap); inferred values marked
+  recap_status.json  ← stage states, fingerprints, flags (hockeyrecap status)
+  recap.log          ← full log of all stage output
+  recording_check.json ← hockeyrecap check report
+  recap_previous/    ← copies of outputs from older tools, before first overwrite
+  .recap_cache/signals/ ← flow signals per Recording (.npz); old keys are not pruned
 ```
+
+`discover.py` ignores old output videos (`cam1.mp4`, `*recap*.mp4`,
+`*_overlay.mp4`). The Scoresheet reader ignores non-sheet images and outputs
+(`scoresheet.is_non_sheet_file`).
 
 Never use ffmpeg concat `inpoint` for sync offsets: on GoPro HEVC it applies
 only about 1/3 of the offset. Seek with `-ss` before the concat input.

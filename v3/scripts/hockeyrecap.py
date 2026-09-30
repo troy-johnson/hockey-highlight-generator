@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import recap_runner as rr  # noqa: E402
-from recap_options import OPTIONS_FILE, parse_set, resolve_options  # noqa: E402
+from recap_options import GAME_KEYS, OPTIONS_FILE, parse_set, resolve_options  # noqa: E402
 
 try:
     from rich.console import Console
@@ -56,7 +56,8 @@ def _console():
 def _strip(text: str) -> str:
     """Drop rich markup for plain output."""
     import re
-    return text if HAVE_RICH else re.sub(r"\[/?[a-z ]+\]", "", text)
+    styles = "|".join(sorted({s for v in STATE_STYLE.values() for s in v.split()} | {"bold", "yellow"}))
+    return text if HAVE_RICH else re.sub(rf"\[/?(?:(?:{styles}) ?)+\]", "", text)
 
 
 class RichReporter(rr.Reporter):
@@ -114,7 +115,7 @@ class RichReporter(rr.Reporter):
 
 def _cli_options(args) -> dict:
     cli = parse_set(args.set or [])
-    for key in ("league", "opponent", "focus_team", "perspective", "live_play_speed", "start"):
+    for key in GAME_KEYS:  # a key without a CLI flag is not on args
         v = getattr(args, key, None)
         if v is not None:
             cli[key] = v

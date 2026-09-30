@@ -38,7 +38,7 @@ sys.path.insert(0, str(HERE))
 STATUS_FILE = "recap_status.json"
 LOG_FILE = "recap.log"
 CACHE_DIR = ".recap_cache"
-PREVIOUS_DIR = "recap_previous"      # outputs of older runs are moved here, never deleted
+PREVIOUS_DIR = "recap_previous"      # copies of outputs from older tools, kept before the first overwrite
 
 OK_STATES = ("done", "flagged")
 
@@ -185,7 +185,7 @@ class Stage:
 
 def _fp_discovery(ctx):
     return {"files": [file_identity(p) + [str(p.parent.name)] for p in camera_files(ctx.game_folder)],
-            "script": _file_hash(HERE / "discover.py")}
+            "scripts": [_file_hash(HERE / n) for n in ("discover.py", "recordings.py")]}
 
 
 def _run_discovery(ctx):
@@ -227,11 +227,18 @@ def _run_sync(ctx):
 # ROIs ----------------------------------------------------------------------
 
 def _roi_mode(ctx) -> str:
-    """'keep' when a rois.json exists that auto_roi.py did not write (picked by hand), else 'auto'."""
+    """
+    'keep' when rois.json was picked or changed by hand, else 'auto'.
+    auto_roi.py writes rois.json and then rois_auto.json, so a rois.json newer
+    than rois_auto.json (or without it) comes from roi_picker.py or an edit.
+    """
     root = ctx.game_folder
     if ctx.options.get("rois", {}).get("source") == "auto":
         return "auto"
-    if (root / "rois.json").exists() and not (root / "rois_auto.json").exists():
+    rois, auto = root / "rois.json", root / "rois_auto.json"
+    if not rois.exists():
+        return "auto"
+    if not auto.exists() or rois.stat().st_mtime_ns > auto.stat().st_mtime_ns:
         return "keep"
     return "auto"
 
@@ -247,7 +254,7 @@ def _fp_rois(ctx):
 
 def _run_rois(ctx):
     if _roi_mode(ctx) == "keep":
-        return StageResult("flagged", ["using the existing rois.json (not from auto_roi.py); check it, "
+        return StageResult("flagged", ["using the existing rois.json (picked or changed by hand); check it, "
                                        "or use --set rois.source=auto"], "kept rois.json")
     rc, lines = ctx.run_cmd([ctx.python, str(HERE / "auto_roi.py"), str(ctx.game_folder)])
     if rc != 0:
@@ -349,7 +356,10 @@ def _run_detection(ctx):
         rc2, out = ctx.run_cmd(argv)
         if rc2 != 0:
             flags.append(f"{Path(argv[1]).name} failed: {_last_error(out)}")
-    n = max(0, sum(1 for _ in open(root / "markers.csv")) - 1) if (root / "markers.csv").exists() else 0
+    n = 0
+    if (root / "markers.csv").exists():
+        with open(root / "markers.csv") as f:
+            n = max(0, sum(1 for _ in f) - 1)
     msg = f"{n} markers" + (f"; {hits[0]} Recording(s) from signal cache" if hits[0] else "")
     return StageResult("flagged" if flags else "done", flags, msg)
 
@@ -436,7 +446,7 @@ def human_size(n: float) -> str:
 
 
 def _keep_previous_outputs(ctx: Context, stage: Stage, status: dict) -> None:
-    """Move outputs that an older tool wrote (not this runner) to recap_previous/ once."""
+    """Copy outputs that an older tool wrote (not this runner) to recap_previous/ before the first overwrite."""
     if stage.name in status.get("stages", {}):
         return
     for name in stage.outputs(ctx):
@@ -503,8 +513,12 @@ def run_game(game_folder: str | Path, options: dict, reporter: Reporter | None =
                 reporter.stage_end(stage.name, rec, reused=False)
                 continue
 
-            fp = digest(stage.fingerprint(ctx))
-            outputs_ok = all((root / o).exists() for o in stage.outputs(ctx))
+            try:
+                fp = digest(stage.fingerprint(ctx))
+                outputs_ok = all((root / o).exists() for o in stage.outputs(ctx))
+            except Exception as exc:  # e.g. an unreadable file: run the stage, let it report
+                ctx.log(f"fingerprint error: {exc!r}")
+                fp, outputs_ok = None, False
             if (i < force_from and prev.get("state") in OK_STATES and prev.get("fingerprint") == fp
                     and outputs_ok):
                 prev["reused"] = True
@@ -515,17 +529,18 @@ def run_game(game_folder: str | Path, options: dict, reporter: Reporter | None =
                 reporter.stage_end(stage.name, prev, reused=True)
                 continue
 
-            _keep_previous_outputs(ctx, stage, status)
             rec = {"state": "running", "fingerprint": fp, "started": _now(), "finished": None,
                    "duration_s": None, "flags": [], "message": ""}
-            status["stages"][stage.name] = rec
-            save_status(root, status)
             t0 = time.time()
             try:
+                _keep_previous_outputs(ctx, stage, status)
+                status["stages"][stage.name] = rec
+                save_status(root, status)
                 result = stage.run(ctx)
             except Exception as exc:  # a bug or an unexpected error in one stage is a flag
                 ctx.log(f"error: {exc!r}")
                 result = StageResult("failed", [f"{stage.name} error: {exc}"], str(exc))
+            status["stages"][stage.name] = rec
             rec.update({"state": result.state, "finished": _now(), "duration_s": round(time.time() - t0, 1),
                         "flags": result.flags, "message": result.message, "reused": False})
             if result.state not in OK_STATES:

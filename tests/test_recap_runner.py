@@ -227,3 +227,76 @@ def test_camera_files_skip_old_outputs(tmp_path):
     for n in ("GX010017.MP4", "cam1.mp4", "cam2.mp4", "recap.mp4"):
         (tmp_path / n).write_bytes(b"x")
     assert [p.name for p in rr.camera_files(tmp_path)] == ["GX010017.MP4"]
+
+
+# --- review follow-ups -------------------------------------------------------
+
+def _ctx(tmp_path, options=None):
+    return rr.Context(tmp_path, options or {}, rr.Reporter())
+
+
+def _touch_ns(path, ns):
+    import os
+    os.utime(path, ns=(ns, ns))
+
+
+def test_roi_mode_auto_when_no_rois(tmp_path):
+    assert rr._roi_mode(_ctx(tmp_path)) == "auto"
+
+
+def test_roi_mode_keeps_rois_from_older_pipeline(tmp_path):
+    (tmp_path / "rois.json").write_text("{}")
+    assert rr._roi_mode(_ctx(tmp_path)) == "keep"
+
+
+def test_roi_mode_auto_after_auto_roi_run(tmp_path):
+    (tmp_path / "rois.json").write_text("{}")
+    (tmp_path / "rois_auto.json").write_text("{}")
+    _touch_ns(tmp_path / "rois.json", 1_000_000_000_000)
+    _touch_ns(tmp_path / "rois_auto.json", 1_000_000_000_001)
+    assert rr._roi_mode(_ctx(tmp_path)) == "auto"
+
+
+def test_roi_mode_keeps_rois_changed_by_hand_after_auto_run(tmp_path):
+    (tmp_path / "rois.json").write_text("{}")
+    (tmp_path / "rois_auto.json").write_text("{}")
+    _touch_ns(tmp_path / "rois_auto.json", 1_000_000_000_000)
+    _touch_ns(tmp_path / "rois.json", 2_000_000_000_000)
+    assert rr._roi_mode(_ctx(tmp_path)) == "keep"
+    assert rr._roi_mode(_ctx(tmp_path, {"rois": {"source": "auto"}})) == "auto"
+
+
+def test_discovery_fingerprint_covers_recordings_py(tmp_path, monkeypatch):
+    base = rr._fp_discovery(_ctx(tmp_path))
+    real = rr._file_hash
+    monkeypatch.setattr(rr, "_file_hash",
+                        lambda p: "changed" if Path(p).name == "recordings.py" else real(p))
+    assert rr._fp_discovery(_ctx(tmp_path)) != base
+
+
+def test_cache_size_is_in_status_and_batch_summary(tmp_path):
+    def with_cache(ctx):
+        (ctx.cache_dir / "signals").mkdir(parents=True, exist_ok=True)
+        (ctx.cache_dir / "signals" / "signals_x.npz").write_bytes(b"x" * 2048)
+        (ctx.game_folder / "a.out").write_text("x")
+        return StageResult("done")
+
+    calls = []
+    st = run_game(tmp_path, {}, stages=make_stages(calls, {"a": with_cache}))
+    assert st["cache_bytes"] == 2048 == rr.cache_size(tmp_path)
+    assert load_status(tmp_path)["cache_bytes"] == 2048
+    [summary] = run_batch([str(tmp_path)], lambda f: {}, lambda f: rr.Reporter(),
+                          stages=make_stages([], {"a": with_cache}))
+    assert summary["cache_bytes"] == 2048
+    assert rr.human_size(2048) == "2.0 KB"
+
+
+def test_fingerprint_error_is_a_flag_not_a_crash(tmp_path):
+    calls = []
+    stages = make_stages(calls)
+    def boom(ctx):
+        raise OSError("disk gone")
+    stages[1] = Stage("b", "B", boom, lambda ctx: ["b.out"], stages[1].run, needs=("a",))
+    st = run_game(tmp_path, {}, stages=stages)
+    assert calls == ["a", "b", "c"]
+    assert st["state"] == "done"
