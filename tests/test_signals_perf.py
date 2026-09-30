@@ -100,7 +100,7 @@ def test_extract_both_runs_each_camera_once(monkeypatch):
 
 def test_audio_is_skipped_when_not_needed(monkeypatch):
     frame = np.zeros((720, 1280), np.uint8)
-    monkeypatch.setattr(signals, "_ffmpeg_gray_frames", lambda p, fps, width: (iter([frame, frame, frame]), 1280, 720))
+    monkeypatch.setattr(signals, "_ffmpeg_gray_frames", lambda p, fps, width, hw=None: (iter([frame, frame, frame]), 1280, 720))
     called = []
     monkeypatch.setattr(signals, "extract_audio_rms", lambda *a, **k: called.append(1) or np.ones(2, np.float32))
     rois = {"net": ROI(380, 180, 410, 240), "slot": ROI(380, 60, 410, 140)}
@@ -108,3 +108,42 @@ def test_audio_is_skipped_when_not_needed(monkeypatch):
     assert not called and audio.tolist() == [0.0, 0.0] and len(net) == 2
     signals.extract_signals("v.mp4", rois, fps=12, width=1280)
     assert called
+
+
+# Review finding (GPT-6.1 review of #19): a mid-stream hardware failure must not silently truncate detection.
+
+def _decoder(monkeypatch, hw_frames, hw_rc, sw_frames, sw_rc=0):
+    frame = bytes(1280 * 720)
+    calls = []
+
+    def fake(cmd, **kw):
+        hw = "-hwaccel" in cmd
+        calls.append("hw" if hw else "sw")
+        p = MagicMock()
+        buf = [frame] * (hw_frames if hw else sw_frames)
+        p.stdout.read.side_effect = lambda n: buf.pop(0) if buf else b""
+        p.wait.return_value = hw_rc if hw else sw_rc
+        p.returncode = hw_rc if hw else sw_rc
+        return p
+
+    monkeypatch.setattr(subprocess, "Popen", fake)
+    monkeypatch.setattr(signals, "ffprobe_dims", lambda p: (3840, 2160))
+    monkeypatch.setattr(signals, "_videotoolbox_available", lambda: True)
+    monkeypatch.delenv("HHG_HWACCEL", raising=False)
+    return calls
+
+
+def test_midstream_hardware_failure_restarts_in_software(monkeypatch):
+    calls = _decoder(monkeypatch, hw_frames=2, hw_rc=1, sw_frames=5)
+    rois = {"net": ROI(380, 180, 410, 240), "slot": ROI(380, 60, 410, 140)}
+    net, slot, audio = signals.extract_signals("v.mp4", rois, fps=12, width=1280, with_audio=False)
+    assert calls == ["hw", "sw"]
+    assert len(net) == 4                      # 5 software frames -> 4 flow values; the partial hardware run is discarded
+
+
+def test_software_decode_error_keeps_frames_and_warns(monkeypatch, capsys):
+    _decoder(monkeypatch, hw_frames=0, hw_rc=1, sw_frames=3, sw_rc=1)
+    rois = {"net": ROI(380, 180, 410, 240), "slot": ROI(380, 60, 410, 140)}
+    net, _, _ = signals.extract_signals("v.mp4", rois, fps=12, width=1280, with_audio=False)
+    assert len(net) == 2
+    assert "ended with an error" in capsys.readouterr().out
