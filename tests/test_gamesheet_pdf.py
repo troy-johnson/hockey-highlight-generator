@@ -50,3 +50,10 @@ def test_goal_types_from_players_in_the_box():
     s = gp.sheet_from_tables(META, ROSTERS, tables)
     assert [g["type"] for g in s["goals"]["away"]] == ["ES", "PP"]   # PP goal at 01:41 ends the minor
     assert [g["type"] for g in s["goals"]["home"]] == ["ES", "SH"]   # #5 scores at 08:00 while own #5 sits
+
+
+def test_goal_one_second_after_the_on_time_is_still_power_play():
+    tables = {"scoring": {"home": [["3", "13:30", "39", "", ""]], "away": []},
+              "penalties": {"home": [], "away": [["3", "34", "2", "TR", "", "13:29", "15:29", ""]]}}
+    s = gp.sheet_from_tables({**META, "final_score": {"home": 1, "away": 0}}, ROSTERS, tables)
+    assert s["goals"]["home"][0]["type"] == "PP"

@@ -178,7 +178,7 @@ def _in_box(pen: dict, per: str, t: int) -> bool:
     """The player is in the box at clock time t (the clock counts down; a 10-min misconduct is not short-handed)."""
     start, on = parse_time(pen["start"]), parse_time(pen["on"])
     return (pen["per"] == per and pen["minutes"] != "10" and start is not None and on is not None
-            and start > t >= on)
+            and start > t >= on - 1)   # 1 s margin: the sheet can put ON one second after the goal
 
 
 def infer_goal_types(goals: dict, penalties: dict) -> None:
