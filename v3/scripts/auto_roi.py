@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-WIDTH, HEIGHT = 1280, 720          # analysis frame size used by detection
+WIDTH, HEIGHT = 1280, 720          # default analysis size; the real height follows the source aspect ratio
 N_BACKGROUND_FRAMES = 15
 MIN_CONFIDENCE = 0.5               # below this the ROIs are written but flagged for review
 WEIGHTS_URL = "https://huggingface.co/SimulaMet-HOST/HockeyAI/resolve/main/HockeyAI_model_weight.pt"
@@ -64,6 +64,21 @@ def pick_goal_box(dets: list[tuple[str, float, tuple]]) -> tuple[tuple, float] |
     return b, c
 
 
+def _source_dims(path: str) -> tuple[int, int]:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                          "-of", "csv=p=0:s=x", path], capture_output=True, text=True).stdout.strip()
+    w, h = out.split("x")[:2]
+    return int(w), int(h)
+
+
+def analysis_size(path: str, width: int = WIDTH) -> tuple[int, int]:
+    """The frame size detection analyses (same rule as signals._ffmpeg_gray_frames):
+    `width` wide, height from the source aspect ratio, rounded to an even number."""
+    ow, oh = _source_dims(path)
+    h = int(round(oh * (width / ow)))
+    return width, h + (h % 2)
+
+
 def _duration(path: str) -> float:
     out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
                          capture_output=True, text=True).stdout.strip()
@@ -71,10 +86,10 @@ def _duration(path: str) -> float:
 
 
 def median_background(paths: list[str], width: int = WIDTH) -> np.ndarray:
-    """Median grayscale frame (width x WIDTH-aspect) over frames spread across the Recording."""
+    """Median grayscale frame, at the analysis size detection uses, over frames spread across the Recording."""
     if not paths:
         raise ValueError("No chapter files for this camera")
-    height = round(width * HEIGHT / WIDTH)
+    width, height = analysis_size(paths[0], width)
     durations = [_duration(p) for p in paths]
     total = sum(durations)
     frames = []
@@ -101,10 +116,21 @@ def _model():
     if _MODEL is None:
         from ultralytics import YOLO  # optional ML stack (requirements-ml.txt)
         if not WEIGHTS_PATH.exists():
+            # Download to a temporary name and rename only after the weights load,
+            # so an interrupted download never leaves a broken cache behind.
             WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            part = WEIGHTS_PATH.with_name(WEIGHTS_PATH.name + ".part")
             print(f"[auto_roi] Downloading HockeyAI weights to {WEIGHTS_PATH}", flush=True)
-            urllib.request.urlretrieve(WEIGHTS_URL, WEIGHTS_PATH)
-        _MODEL = YOLO(str(WEIGHTS_PATH))
+            try:
+                urllib.request.urlretrieve(WEIGHTS_URL, part)
+                model = YOLO(str(part))
+            except BaseException:
+                part.unlink(missing_ok=True)
+                raise
+            part.replace(WEIGHTS_PATH)
+            _MODEL = model
+        else:
+            _MODEL = YOLO(str(WEIGHTS_PATH))
     return _MODEL
 
 
@@ -125,7 +151,9 @@ def _preview(backgrounds: dict, rois: dict, out: Path) -> None:
         for name, col in (("net", (0, 0, 255)), ("slot", (0, 255, 0))):
             x, y, w, h = rois[key][name]
             cv2.rectangle(im, (x, y), (x + w, y + h), col, 3)
-        tiles.append(cv2.resize(im, (640, 360)))
+        tiles.append(cv2.resize(im, (640, round(640 * im.shape[0] / im.shape[1]))))
+    height = max(t.shape[0] for t in tiles)
+    tiles = [cv2.copyMakeBorder(t, 0, height - t.shape[0], 0, 0, cv2.BORDER_CONSTANT) for t in tiles]
     cv2.imwrite(str(out), cv2.hconcat(tiles))
 
 
@@ -145,7 +173,8 @@ def main(game_folder: str) -> int:
             print(f"[auto_roi] {cam}: no goal frame found on the background", flush=True)
             return 3
         box, conf = found
-        rois[key] = rois_from_goal_box(box)
+        h, w = backgrounds[cam].shape
+        rois[key] = rois_from_goal_box(box, w, h)
         info[key] = {"goal_box": [round(v, 1) for v in box], "confidence": round(conf, 2),
                      "flag": conf < MIN_CONFIDENCE}
         if conf < MIN_CONFIDENCE:

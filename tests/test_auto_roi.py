@@ -51,3 +51,35 @@ def test_main_fails_without_goal_so_picker_runs(tmp_path, monkeypatch):
 def test_run_detect_tries_auto_roi_before_picker():
     script = (Path(__file__).resolve().parents[1] / "run_detect.sh").read_text()
     assert script.index("auto_roi.py") < script.index("roi_picker.py")
+
+
+# Review findings (GPT-6.1 review of #20)
+
+def test_analysis_size_follows_source_aspect_like_signals(monkeypatch):
+    monkeypatch.setattr(A, "_source_dims", lambda path: (4000, 3000))      # 4:3 capture
+    assert A.analysis_size("/x/GX010001.MP4") == (1280, 960)
+    monkeypatch.setattr(A, "_source_dims", lambda path: (3840, 2160))
+    assert A.analysis_size("/x/GX010001.MP4") == (1280, 720)
+
+
+def test_rois_clamp_to_the_real_analysis_height():
+    rois = A.rois_from_goal_box((400.0, 600.0, 800.0, 950.0), 1280, 960)
+    for x, y, w, h in rois.values():
+        assert y + h <= 960 and y + h > 720          # uses the 4:3 frame, not 720
+
+
+def test_interrupted_download_leaves_no_weights(tmp_path, monkeypatch):
+    target = tmp_path / "w.pt"
+    monkeypatch.setattr(A, "WEIGHTS_PATH", target)
+    monkeypatch.setattr(A, "_MODEL", None)
+    monkeypatch.setattr(A.urllib.request, "urlretrieve", lambda url, dest: Path(dest).write_bytes(b"partial"))
+
+    class Broken:
+        def __init__(self, path):
+            raise RuntimeError("corrupt weights")
+
+    import types, sys
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=Broken))
+    with pytest.raises(RuntimeError):
+        A._model()
+    assert not target.exists() and not list(tmp_path.glob("*.part"))
