@@ -1,4 +1,5 @@
-# Optional ML stack (V3 Phase 2): HockeyAI goal-frame detection for automatic ROIs.
+# Optional ML stack (V3 Phase 2): HockeyAI goal-frame detection for automatic ROIs,
+# and the local Scoresheet reader (v3/scripts/scoresheet.py).
 # Install on top of requirements.txt:  pip install -r requirements-ml.txt
 #
 # HockeyAI weights (SimulaMet-HOST/HockeyAI) are MIT; they download on first use
@@ -7,3 +8,10 @@
 # would need an ONNX export or another runtime (see Beads hhg-x56).
 # Without this stack, run_detect.sh falls back to the interactive ROI picker.
 ultralytics>=8.4
+
+# Scoresheet reader: Apple Vision OCR (PyObjC) + Qwen3-VL-8B 4-bit on MLX.
+# Apple Silicon only. The model (about 5.4 GB) downloads on first use to
+# ~/.cache/huggingface/. No API key and no per-game cost.
+mlx-vlm>=0.7.4
+pyobjc-framework-Vision>=12.2
+pyobjc-framework-Quartz>=12.2
