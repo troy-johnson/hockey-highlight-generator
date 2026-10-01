@@ -75,12 +75,15 @@ game_folder/
   rois.json          ← automatic (auto_roi.py) or from roi_picker.py
   rois_auto.json     ← goal box + confidence per camera; rois_preview.png
   events.csv / markers.csv
+  audio_signals.json ← whistles + stoppages, detection timeline (audio_signals.py)
+  music_spans.json   ← YAMNet PA music spans per camera (mute/review)
   recap_options.json ← per-game options (hockeyrecap); inferred values marked
   recap_status.json  ← stage states, fingerprints, flags (hockeyrecap status)
   recap.log          ← full log of all stage output
   recording_check.json ← hockeyrecap check report
   recap_previous/    ← copies of outputs from older tools, before first overwrite
   .recap_cache/signals/ ← flow signals per Recording (.npz); old keys are not pruned
+  .recap_cache/audio/   ← audio features per Recording (.npz); same policy
 ```
 
 `discover.py` ignores old output videos (`cam1.mp4`, `*recap*.mp4`,

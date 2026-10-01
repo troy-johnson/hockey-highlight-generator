@@ -15,3 +15,11 @@ ultralytics>=8.4
 mlx-vlm>=0.7.4
 pyobjc-framework-Vision>=12.2
 pyobjc-framework-Quartz>=12.2
+
+# PA music spans (v3/scripts/audio_signals.py): YAMNet float32 TFLite (Apache 2.0,
+# 4.1 MB) on the LiteRT runtime, CPU only. The model downloads on first use from
+# storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite
+# to ~/.cache/hockey-highlight-generator/yamnet.tflite and is checked by SHA-256
+# (override with HHG_YAMNET_MODEL). Without it, whistles and stoppages still run;
+# the audio stage flags that music spans are missing.
+ai-edge-litert>=2.2

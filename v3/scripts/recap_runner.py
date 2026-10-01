@@ -397,6 +397,77 @@ def _run_scoresheet(ctx):
     return StageResult("flagged" if flags else "done", flags, msg)
 
 
+# Audio signals ---------------------------------------------------------------
+
+def _music_stack_present() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("ai_edge_litert") is not None
+
+
+def _music_model_identity():
+    """
+    Identity of the YAMNet file audio_signals.py will use ($HHG_YAMNET_MODEL or
+    the user cache). When the ML stack is present but the file is not, return
+    a new value each run, so a run after a failed download tries again.
+    """
+    if not _music_stack_present():
+        return None
+    env = os.environ.get("HHG_YAMNET_MODEL")
+    p = Path(env).expanduser() if env else Path.home() / ".cache" / "hockey-highlight-generator" / "yamnet.tflite"
+    if p.is_file():
+        return {"path": str(p), "file": file_identity(p)}
+    return {"path": str(p), "missing": time.time()}
+
+
+def _fp_audio(ctx):
+    root = ctx.game_folder
+    s = _detection_settings(ctx)
+    return {"manifests": [_file_hash(root / f"cam{i}_concat.txt") for i in (1, 2)],
+            "files": [file_identity(p) for p in camera_files(root)],
+            "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280), "rois": _file_hash(root / "rois.json"),
+                     "audio": float(s.get("audio_weight", 0) or 0) > 0},
+            "music_stack": _music_stack_present(),
+            "music_model": _music_model_identity(),
+            "scripts": [_file_hash(HERE / "audio_signals.py"), _file_hash(V2 / "signals.py")]}
+
+
+def audio_argv(ctx) -> list[str]:
+    s = _detection_settings(ctx)
+    argv = [ctx.python, str(HERE / "audio_signals.py"), str(ctx.game_folder),
+            "--fps", str(s.get("fps", 12)), "--width", str(s.get("width", 1280))]
+    if float(s.get("audio_weight", 0) or 0) > 0:
+        argv.append("--flow_audio")
+    if not ctx.use_cache:
+        argv.append("--no-cache")
+    return argv
+
+
+_AUDIO_PROGRESS = re.compile(r"\[audio\] decoded (\d+)/(\d+) s")
+_AUDIO_SUMMARY = re.compile(r"\[audio\] (\d+ whistles, .*)")
+_AUDIO_FLAG = re.compile(r"\[audio\] flag: (.+)")
+
+
+def _run_audio(ctx):
+    summary, flags = [""], []
+
+    def on_line(line: str):
+        m = _AUDIO_PROGRESS.search(line)
+        if m and int(m.group(2)):
+            done, total = int(m.group(1)), int(m.group(2))
+            ctx.reporter.stage_progress("audio", min(done / total, 1.0), f"{done}/{total} s of audio")
+        m = _AUDIO_SUMMARY.search(line)
+        if m:
+            summary[0] = m.group(1)
+        m = _AUDIO_FLAG.search(line)
+        if m:
+            flags.append(m.group(1))
+
+    rc, lines = ctx.run_cmd(audio_argv(ctx), on_line)
+    if rc != 0:
+        return StageResult("failed", [f"audio signals failed: {_last_error(lines)}"], _last_error(lines))
+    return StageResult("flagged" if flags else "done", flags, summary[0] or "audio_signals.json written")
+
+
 STAGES: list[Stage] = [
     Stage("discovery", "Find cameras and Recordings", _fp_discovery, lambda c: ["chapters.json"], _run_discovery),
     Stage("sync", "Sync cameras", _fp_sync,
@@ -407,6 +478,9 @@ STAGES: list[Stage] = [
     Stage("detection", "Detect events", _fp_detection,
           lambda c: ["events.csv", "markers.csv", "markers.fcpxml", "markers.edl"], _run_detection,
           needs=("sync", "rois"), needs_two_cameras=True),
+    Stage("audio", "Find whistles, stoppages, PA music", _fp_audio,
+          lambda c: ["audio_signals.json", "music_spans.json"], _run_audio,
+          needs=("sync",), needs_two_cameras=True),
     Stage("scoresheet", "Read Scoresheet / GameSheet", _fp_scoresheet, lambda c: ["game_sheet.json"],
           _run_scoresheet),
 ]
@@ -582,6 +656,13 @@ def run_game(game_folder: str | Path, options: dict, reporter: Reporter | None =
     return status
 
 
+def _ordered_states(records: dict, stages: list[Stage]) -> dict:
+    """Stage states in pipeline order; unknown names (old status files) last."""
+    order = [s.name for s in stages if s.name in records]
+    order += [n for n in records if n not in order]
+    return {n: records[n].get("state") for n in order}
+
+
 def run_batch(folders: list[str], make_options: Callable[[str], dict], reporter_for: Callable[[str], Reporter],
               from_stage: str | None = None, use_cache: bool = True,
               stages: list[Stage] | None = None) -> list[dict]:
@@ -598,7 +679,7 @@ def run_batch(folders: list[str], make_options: Callable[[str], dict], reporter_
             st = run_game(folder, opts, reporter_for(folder), from_stage=from_stage, use_cache=use_cache,
                           stages=stages)
             summary.update(state=st["state"], flags=st.get("flags", []), cache_bytes=st.get("cache_bytes", 0),
-                           stages={n: r.get("state") for n, r in st["stages"].items()},
+                           stages=_ordered_states(st["stages"], stages or STAGES),
                            error=st.get("stop_reason"))
         except KeyboardInterrupt:
             summary.update(state="stopped", error="interrupted")
