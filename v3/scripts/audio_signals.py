@@ -42,6 +42,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +50,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import median_filter, uniform_filter1d
+from scipy.stats import rankdata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -198,10 +200,9 @@ def activity_rank(flux: np.ndarray, rate: float = RATE, smooth_s: float = STOPPA
         return out
     sm = uniform_filter1d(np.where(ok, flux, 0.0), max(1, int(round(smooth_s * rate))), mode="nearest")
     vals = sm[ok]
-    order = np.argsort(vals, kind="stable")
-    ranks = np.empty(len(vals), np.float32)
-    ranks[order] = np.arange(len(vals), dtype=np.float32) / max(1, len(vals) - 1)
-    out[ok] = ranks
+    # Equal values get the same rank (mean of their positions), so a long
+    # stretch of constant sound does not climb from 0 to 1 over time.
+    out[ok] = (rankdata(vals, method="average") - 1) / max(1, len(vals) - 1)
     return out
 
 
@@ -320,7 +321,8 @@ def music_spans(bins: np.ndarray, camera: str, t0: float = 0.0, rule: dict | Non
     for a, e in spans:
         if e - a < r["min_s"]:
             continue
-        muted[a:e] = True
+        # Mark the padded span so no 'review' span overlaps a 'mute' span.
+        muted[max(0, a - int(np.ceil(r["pad_before_s"]))):e + int(np.ceil(r["pad_after_s"]))] = True
         span = {"camera": camera, "start": round(max(0.0, t0 + a - r["pad_before_s"]), 2),
                 "end": round(t0 + e + r["pad_after_s"], 2), "peak": round(float(m[a:e].max()), 3),
                 "state": "mute"}
@@ -396,9 +398,14 @@ def load_music_model() -> tuple[Path | None, str | None]:
     except ImportError:
         return None, "PA music detection needs the optional ML stack (pip install -r requirements-ml.txt)"
     try:
-        return yamnet_model_path(), None
+        path = yamnet_model_path()
     except Exception as exc:  # noqa: BLE001 - any fetch problem is a flag
         return None, f"PA music detection: YAMNet model unavailable ({exc})"
+    try:
+        _Yamnet(path)  # a bad file must not stop whistle detection later
+    except Exception as exc:  # noqa: BLE001
+        return None, f"PA music detection: YAMNet model could not be loaded ({exc})"
+    return path, None
 
 
 # ---------------------------------------------------------------------------
@@ -452,77 +459,97 @@ def _decode(input_args: list[str], feats: _Features, progress=None) -> float:
     """Decode mono 16 kHz audio with ffmpeg and feed it to feats. Returns seconds decoded."""
     argv = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", *input_args,
             "-vn", "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"]
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    done = 0
-    step = CHUNK_S * SR * 4
-    try:
-        assert proc.stdout is not None
-        while True:
-            raw = proc.stdout.read(step)
-            if not raw:
-                break
-            x = np.frombuffer(raw[: len(raw) // 4 * 4], np.float32)
-            feats.feed(x)
-            done += len(x)
-            if progress:
-                progress(done / SR)
-        err = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-        rc = proc.wait()
-    except BaseException:
-        proc.kill()
-        proc.wait()
-        raise
-    if rc != 0 and done == 0:
-        raise RuntimeError(f"ffmpeg failed: {err.strip()[-300:]}")
+    # stderr goes to a file, not a pipe: a full stderr pipe would block ffmpeg.
+    with tempfile.TemporaryFile() as errf:
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=errf)
+        done = 0
+        step = CHUNK_S * SR * 4
+        try:
+            assert proc.stdout is not None
+            while True:
+                raw = proc.stdout.read(step)
+                if not raw:
+                    break
+                x = np.frombuffer(raw[: len(raw) // 4 * 4], np.float32)
+                feats.feed(x)
+                done += len(x)
+                if progress:
+                    progress(done / SR)
+            rc = proc.wait()
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        errf.seek(0)
+        err = errf.read().decode(errors="replace").strip()
+    # A partial decode is an error: it must not be cached or used as a whole camera.
+    if rc != 0:
+        raise RuntimeError(f"ffmpeg failed (exit {rc}) after {done / SR:.0f} s: {err[-300:]}")
+    if done == 0:
+        raise RuntimeError(f"ffmpeg decoded no audio{': ' + err[-300:] if err else ''}")
     return done / SR
 
 
-def _feature_key(files: list[str], seek: float, with_music: bool) -> str:
+def _feature_key(files: list[str], seek: float, music_id: str | None) -> str:
+    """Cache key. music_id is the SHA-256 of the YAMNet file, or None for no music features."""
     from signals import _file_identity
     payload = {"version": FEATURES_VERSION, "sr": SR, "n_fft": N_FFT, "hop": HOP,
                "whistle_band": WHISTLE_BAND_HZ, "band_w": BAND_W_HZ, "flux_band": FLUX_BAND_HZ,
                "files": [_file_identity(f) for f in files], "seek": round(seek, 3),
-               "music": YAMNET_SHA256 if with_music else None}
+               "music": music_id}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:24]
 
 
 def _recording_features(manifest_lines: list[str], base_dir: str, input_args: list[str],
-                        model: Path | None, cache_dir: str | None, progress) -> dict:
-    """Features of one Recording, from the cache when its files and settings are unchanged."""
+                        model: Path | None, cache_dir: str | None, progress, music_id: str | None = None) -> dict:
+    """
+    Features of one Recording, from the cache when its files and settings are
+    unchanged. With a model, only a cache with music features from the same
+    model file is used. Without a model, a cache with music is also used, but
+    its music features are dropped.
+    """
     from signals import _manifest_inputs
     files, seek = _manifest_inputs(manifest_lines, base_dir)
-    paths = []
+    if model is not None and music_id is None:
+        music_id = _sha256(model)
+    write_path, read_paths = None, []
     if cache_dir:
         try:
-            for m in ([True, False] if model else [False]):
-                paths.append((m, os.path.join(cache_dir, f"audio_{_feature_key(files, seek, m)}.npz")))
+            write_path = os.path.join(cache_dir, f"audio_{_feature_key(files, seek, music_id if model else None)}.npz")
+            read_paths = [write_path]
+            if model is None:
+                read_paths.append(os.path.join(cache_dir, f"audio_{_feature_key(files, seek, YAMNET_SHA256)}.npz"))
         except OSError:
-            paths = []
-        for _, p in paths:
+            write_path, read_paths = None, []
+        for p in read_paths:
             if os.path.exists(p):
                 try:
                     with np.load(p) as z:
                         feats = {k: z[k] for k in z.files}
-                    print(f"[audio] cache hit: {os.path.basename(files[0]) if files else '?'}", flush=True)
-                    return feats
                 except Exception:  # noqa: BLE001 - damaged cache file: compute again
-                    pass
+                    continue
+                if model is None:
+                    feats.pop("music", None)
+                elif "music" not in feats:
+                    continue
+                print(f"[audio] cache hit: {os.path.basename(files[0]) if files else '?'}", flush=True)
+                return feats
     feats = _Features(_Yamnet(model) if model else None)
     _decode(input_args, feats, progress)
     out = feats.result()
-    if paths:
-        p = paths[0][1]
+    if write_path and cache_dir:
         try:
             os.makedirs(cache_dir, exist_ok=True)
-            tmp = p + ".tmp.npz"
+            tmp = write_path + ".tmp.npz"
             np.savez(tmp, **out)
-            os.replace(tmp, p)
+            os.replace(tmp, write_path)
         except OSError as exc:
-            print(f"[WARN] could not write audio cache {p} ({exc})", flush=True)
+            print(f"[WARN] could not write audio cache {write_path} ({exc})", flush=True)
     return out
 
 
-def camera_features(manifest: str, model: Path | None, cache_dir: str | None, progress=None) -> dict:
+def camera_features(manifest: str, model: Path | None, cache_dir: str | None, progress=None,
+                    music_id: str | None = None) -> dict:
     """
     Features of one camera on the detection timeline. Each Recording block is
     placed at its '# recording' start, as in signals.extract_signals; gaps
@@ -534,7 +561,8 @@ def camera_features(manifest: str, model: Path | None, cache_dir: str | None, pr
     with open(manifest) as f:
         lines = f.read().splitlines()
     if len(blocks) < 2:
-        parts = [(0.0, _recording_features(lines, base, concat_input_args(manifest), model, cache_dir, progress))]
+        parts = [(0.0, _recording_features(lines, base, concat_input_args(manifest), model, cache_dir, progress,
+                                         music_id))]
     else:
         parts = []
         done_before = [0.0]
@@ -544,7 +572,8 @@ def camera_features(manifest: str, model: Path | None, cache_dir: str | None, pr
             try:
                 before = done_before[0]
                 prog = (lambda s, b=before: progress(b + s)) if progress else None
-                feats = _recording_features(header + files, base, concat_input_args(tmp), model, cache_dir, prog)
+                feats = _recording_features(header + files, base, concat_input_args(tmp), model, cache_dir, prog,
+                                            music_id)
             finally:
                 _remove_temp_manifest(tmp)
             done_before[0] += len(feats["score"]) / RATE
@@ -603,8 +632,11 @@ def _cached_flow(root: Path, cam: str, manifest: str, fps: int, width: int,
         p = root / ".recap_cache" / "signals" / f"signals_{key}.npz"
         if not p.exists():
             return None
-        with np.load(p) as z:
-            placed.append((int(round(max(start, 0.0) * fps)), (z["net"] + z["slot"]).astype(np.float32)))
+        try:
+            with np.load(p) as z:
+                placed.append((int(round(max(start, 0.0) * fps)), (z["net"] + z["slot"]).astype(np.float32)))
+        except Exception:  # noqa: BLE001 - damaged cache: flow is an extra field only
+            return None
     n = max(i + len(a) for i, a in placed)
     out = np.zeros(n, np.float32)
     for i, a in placed:
@@ -628,6 +660,7 @@ def analyse(root: Path, use_music: bool = True, cache: bool = True, fps: int = 1
             music_flags.append(why)
     else:
         music_flags.append("PA music detection turned off (--no-music)")
+    music_id = _sha256(model) if model else None
     cache_dir = str(root / ".recap_cache" / "audio") if cache else None
     total = {}
     try:
@@ -652,7 +685,8 @@ def analyse(root: Path, use_music: bool = True, cache: bool = True, fps: int = 1
 
     def job(cam):
         try:
-            return cam, camera_features(str(root / f"{cam}_concat.txt"), model, cache_dir, prog(cam)), None
+            return cam, camera_features(str(root / f"{cam}_concat.txt"), model, cache_dir, prog(cam),
+                                        music_id), None
         except Exception as exc:  # noqa: BLE001 - a bad camera is a flag
             return cam, None, str(exc)
 
@@ -667,7 +701,12 @@ def analyse(root: Path, use_music: bool = True, cache: bool = True, fps: int = 1
     whistles = merge_camera_whistles(per_cam)
     act = combine_activity([activity_rank(f["flux"]) for f in feats.values()])
     stoppages = find_stoppages(whistles, act)
-    flows = {c: _cached_flow(root, c, str(root / f"{c}_concat.txt"), fps, width, flow_audio) for c in cams}
+    flows = {}
+    for c in cams:
+        try:
+            flows[c] = _cached_flow(root, c, str(root / f"{c}_concat.txt"), fps, width, flow_audio)
+        except Exception:  # noqa: BLE001 - flow is an extra field only
+            flows[c] = None
     for s in stoppages:
         for c, flow in flows.items():
             if flow is None or not len(flow):
@@ -698,7 +737,7 @@ def analyse(root: Path, use_music: bool = True, cache: bool = True, fps: int = 1
         music_flags.append("PA music detection: no camera audio")
     music_out = {
         "timeline": TIMELINE, "model": {"name": "YAMNet float32 (MediaPipe)", "class": "Music (132)",
-                                        "sha256": YAMNET_SHA256} if model else None,
+                                        "sha256": music_id, "path": str(model)} if model else None,
         "spans": sorted(spans, key=lambda s: (s["start"], s["camera"])),
         "muted_s": round(sum(s["end"] - s["start"] for s in spans if s["state"] == "mute"), 1),
         "settings": MUSIC, "flags": music_flags,

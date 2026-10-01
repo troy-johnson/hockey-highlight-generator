@@ -103,3 +103,6 @@ checked by ear or by video.
 - A whistle during loud play or crowd noise can fail the steadiness check.
 - Activity rank is relative to the game, so a very quiet or very loud game
   shifts what "low" means less than a fixed level would, but this is untested.
+- The audio stage needs the sync stage, and sync needs two cameras. A game
+  with one usable camera gets no whistles or stoppages. The code can analyse
+  one camera, so a later change can drop that need.

@@ -179,3 +179,179 @@ def test_yamnet_env_override(tmp_path, monkeypatch):
     f.write_bytes(b"x")
     monkeypatch.setenv(A.YAMNET_ENV, str(f))
     assert A.yamnet_model_path(download=False) == f
+
+
+# --- review follow-ups (PR #24) -------------------------------------------------
+
+def test_activity_rank_gives_equal_values_equal_rank():
+    r = A.activity_rank(np.zeros(10000))
+    assert np.allclose(r, r[0])
+    # Constant sound is never "low then restart": no stoppage.
+    assert A.find_stoppages([_w(10.0)], r) == []
+
+
+def test_review_span_does_not_overlap_padded_mute_span():
+    b = np.zeros(40, np.float32)
+    b[3:6] = 0.1
+    b[6:12] = 0.5
+    spans = A.music_spans(b, "cam1")
+    mute = [s for s in spans if s["state"] == "mute"]
+    review = [s for s in spans if s["state"] == "review"]
+    assert len(mute) == 1
+    assert all(r["end"] <= mute[0]["start"] or r["start"] >= mute[0]["end"] for r in review)
+
+
+def test_place_puts_recordings_at_start_with_nan_gap():
+    f = {"score": np.ones(100, np.float32), "hz": np.ones(100, np.float32),
+         "flux": np.ones(100, np.float32), "music": np.ones(4, np.float32)}
+    out = A._place([(0.0, f), (5.0, f)], with_music=True)
+    assert len(out["score"]) == 600
+    assert np.isnan(out["score"][100:500]).all() and (out["score"][500:] == 1).all()
+    j = int(round(5.0 / A.YAMNET_HOP_S))
+    assert np.isnan(out["music"][4:j]).all() and (out["music"][j:j + 4] == 1).all()
+
+
+def _fake_recording_features(calls):
+    def f(lines, base, input_args, model, cache_dir, progress, music_id=None):
+        calls.append((list(lines), list(input_args)))
+        return {k: np.ones(100, np.float32) for k in ("score", "hz", "flux")}
+    return f
+
+
+def test_camera_features_single_recording_seeks_before_input(tmp_path, monkeypatch):
+    m = tmp_path / "cam2_concat.txt"
+    m.write_text("ffconcat version 1.0\n# seek 0.574\nfile 'a.MP4'\n")
+    calls = []
+    monkeypatch.setattr(A, "_recording_features", _fake_recording_features(calls))
+    A.camera_features(str(m), None, None)
+    args = calls[0][1]
+    assert args[args.index("-ss") + 1] == "0.574" and args.index("-ss") < args.index("-i")
+
+
+def test_camera_features_places_recording_blocks(tmp_path, monkeypatch):
+    m = tmp_path / "cam1_concat.txt"
+    m.write_text("ffconcat version 1.0\n# recording -0.5\nfile 'a.MP4'\n"
+                 "# recording 10.0\nfile 'b.MP4'\n")
+    calls = []
+    monkeypatch.setattr(A, "_recording_features", _fake_recording_features(calls))
+    out = A.camera_features(str(m), None, None)
+    # First block starts before the timeline: seek 0.5 s into it, place at 0.
+    assert "# seek 0.500" in calls[0][0] and not any("seek" in ln for ln in calls[1][0])
+    assert len(out["score"]) == 1100
+    assert (out["score"][:100] == 1).all() and np.isnan(out["score"][100:1000]).all()
+    assert (out["score"][1000:] == 1).all()
+
+
+def _fake_popen(monkeypatch, script):
+    import subprocess
+    import sys
+    real = subprocess.Popen
+    monkeypatch.setattr(A.subprocess, "Popen",
+                        lambda argv, **kw: real([sys.executable, "-c", script], **kw))
+
+
+def test_decode_partial_failure_raises_and_large_stderr_does_not_hang(monkeypatch):
+    _fake_popen(monkeypatch, (
+        "import sys\n"
+        "sys.stderr.write('e' * 300000); sys.stderr.flush()\n"
+        "sys.stdout.buffer.write(b'\\0' * 64000 * 4)\n"
+        "sys.exit(1)\n"))
+    import pytest
+    with pytest.raises(RuntimeError, match="exit 1"):
+        A._decode([], A._Features(None))
+
+
+def test_decode_no_audio_raises(monkeypatch):
+    _fake_popen(monkeypatch, "pass")
+    import pytest
+    with pytest.raises(RuntimeError, match="no audio"):
+        A._decode([], A._Features(None))
+
+
+def _cache_setup(tmp_path, monkeypatch):
+    (tmp_path / "a.MP4").write_bytes(b"x")
+    lines = ["ffconcat version 1.0", "file 'a.MP4'"]
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    files = [str(tmp_path / "a.MP4")]
+    decoded = []
+
+    class FakeYamnet:
+        def __init__(self, model):
+            pass
+
+    def fake_decode(args, feats, progress=None):
+        decoded.append(True)
+        feats.score, feats.hz, feats.flux = ([np.zeros(5, np.float32)] for _ in range(3))
+        if feats.yamnet is not None:
+            feats.music = [0.5]
+        return 1.0
+
+    monkeypatch.setattr(A, "_Yamnet", FakeYamnet)
+    monkeypatch.setattr(A, "_decode", fake_decode)
+    return lines, cache, files, decoded
+
+
+def test_cache_without_music_is_not_used_when_model_is_present(tmp_path, monkeypatch):
+    lines, cache, files, decoded = _cache_setup(tmp_path, monkeypatch)
+    old = {k: np.zeros(5, np.float32) for k in ("score", "hz", "flux")}
+    np.savez(cache / f"audio_{A._feature_key(files, 0.0, None)}.npz", **old)
+    out = A._recording_features(lines, str(tmp_path), [], tmp_path / "m.tflite", str(cache), None,
+                                music_id="abc")
+    assert decoded and "music" in out
+    assert (cache / f"audio_{A._feature_key(files, 0.0, 'abc')}.npz").exists()
+
+
+def test_cache_with_music_is_used_without_model_and_music_dropped(tmp_path, monkeypatch):
+    lines, cache, files, decoded = _cache_setup(tmp_path, monkeypatch)
+    old = {k: np.zeros(5, np.float32) for k in ("score", "hz", "flux", "music")}
+    np.savez(cache / f"audio_{A._feature_key(files, 0.0, A.YAMNET_SHA256)}.npz", **old)
+    out = A._recording_features(lines, str(tmp_path), [], None, str(cache), None)
+    assert not decoded and "music" not in out
+
+
+def test_other_model_file_gets_its_own_cache_key():
+    assert A._feature_key([], 0.0, "abc") != A._feature_key([], 0.0, A.YAMNET_SHA256)
+
+
+def test_bad_model_file_is_a_flag_not_a_crash(tmp_path, monkeypatch):
+    import pytest
+    pytest.importorskip("ai_edge_litert")
+    bad = tmp_path / "bad.tflite"
+    bad.write_bytes(b"not a model")
+    monkeypatch.setattr(A, "yamnet_model_path", lambda download=True: bad)
+    path, why = A.load_music_model()
+    assert path is None and "could not be loaded" in why
+
+
+def _game(tmp_path):
+    for c in ("cam1", "cam2"):
+        (tmp_path / f"{c}_concat.txt").write_text("ffconcat version 1.0\n")
+    return tmp_path
+
+
+def test_one_bad_camera_is_a_flag_and_other_camera_is_used(tmp_path, monkeypatch):
+    score, hz = _score(60, [(10.0, 1.0, 20.0, 2200.0, 5.0)])
+
+    def fake(manifest, model, cache_dir, progress=None, music_id=None):
+        if "cam1" in manifest:
+            raise RuntimeError("ffmpeg failed (exit 1)")
+        return {"score": score, "hz": hz, "flux": np.ones(len(score), np.float32)}
+
+    monkeypatch.setattr(A, "camera_features", fake)
+    sig, mus = A.analyse(_game(tmp_path), use_music=False)
+    assert sig["cameras"] == ["cam2"] and len(sig["whistles"]) == 1
+    assert any("cam1: audio could not be read" in f for f in sig["flags"])
+
+
+def test_broken_flow_cache_does_not_stop_analysis(tmp_path, monkeypatch):
+    score, hz = _score(60, [(10.0, 1.0, 20.0, 2200.0, 5.0)])
+    monkeypatch.setattr(A, "camera_features", lambda *a, **k: {
+        "score": score, "hz": hz, "flux": np.ones(len(score), np.float32)})
+
+    def boom(*a, **k):
+        raise ValueError("corrupt npz")
+
+    monkeypatch.setattr(A, "_cached_flow", boom)
+    sig, _ = A.analyse(_game(tmp_path), use_music=False)
+    assert len(sig["whistles"]) == 1

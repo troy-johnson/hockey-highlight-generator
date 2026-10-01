@@ -344,3 +344,29 @@ def test_fingerprint_error_is_a_flag_not_a_crash(tmp_path):
     st = run_game(tmp_path, {}, stages=stages)
     assert calls == ["a", "b", "c"]
     assert st["state"] == "done"
+
+
+def test_audio_fingerprint_follows_model_file_and_audio_weight(tmp_path, monkeypatch):
+    stage = next(s for s in rr.STAGES if s.name == "audio")
+    monkeypatch.setattr(rr, "_music_stack_present", lambda: True)
+    m1, m2 = tmp_path / "m1.tflite", tmp_path / "m2.tflite"
+    m1.write_bytes(b"a")
+    m2.write_bytes(b"bb")
+    ctx = rr.Context(tmp_path, {"detection": {"audio_weight": 0}}, rr.Reporter())
+    monkeypatch.setenv("HHG_YAMNET_MODEL", str(m1))
+    fp1 = stage.fingerprint(ctx)
+    monkeypatch.setenv("HHG_YAMNET_MODEL", str(m2))
+    assert stage.fingerprint(ctx) != fp1
+    ctx2 = rr.Context(tmp_path, {"detection": {"audio_weight": 0.3}}, rr.Reporter())
+    assert stage.fingerprint(ctx2) != stage.fingerprint(ctx)
+
+
+def test_audio_fingerprint_retries_while_model_is_missing(tmp_path, monkeypatch):
+    stage = next(s for s in rr.STAGES if s.name == "audio")
+    monkeypatch.setattr(rr, "_music_stack_present", lambda: True)
+    monkeypatch.setenv("HHG_YAMNET_MODEL", str(tmp_path / "missing.tflite"))
+    ctx = rr.Context(tmp_path, {}, rr.Reporter())
+    a = stage.fingerprint(ctx)
+    import time
+    time.sleep(0.01)
+    assert stage.fingerprint(ctx) != a

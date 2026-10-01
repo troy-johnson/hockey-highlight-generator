@@ -404,13 +404,30 @@ def _music_stack_present() -> bool:
     return importlib.util.find_spec("ai_edge_litert") is not None
 
 
+def _music_model_identity():
+    """
+    Identity of the YAMNet file audio_signals.py will use ($HHG_YAMNET_MODEL or
+    the user cache). When the ML stack is present but the file is not, return
+    a new value each run, so a run after a failed download tries again.
+    """
+    if not _music_stack_present():
+        return None
+    env = os.environ.get("HHG_YAMNET_MODEL")
+    p = Path(env).expanduser() if env else Path.home() / ".cache" / "hockey-highlight-generator" / "yamnet.tflite"
+    if p.is_file():
+        return {"path": str(p), "file": file_identity(p)}
+    return {"path": str(p), "missing": time.time()}
+
+
 def _fp_audio(ctx):
     root = ctx.game_folder
     s = _detection_settings(ctx)
     return {"manifests": [_file_hash(root / f"cam{i}_concat.txt") for i in (1, 2)],
             "files": [file_identity(p) for p in camera_files(root)],
-            "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280), "rois": _file_hash(root / "rois.json")},
+            "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280), "rois": _file_hash(root / "rois.json"),
+                     "audio": float(s.get("audio_weight", 0) or 0) > 0},
             "music_stack": _music_stack_present(),
+            "music_model": _music_model_identity(),
             "scripts": [_file_hash(HERE / "audio_signals.py"), _file_hash(V2 / "signals.py")]}
 
 
