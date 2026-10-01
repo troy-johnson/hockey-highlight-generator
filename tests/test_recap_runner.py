@@ -207,7 +207,51 @@ def test_batch_one_failed_game_does_not_stop_the_others(tmp_path):
 
 
 def test_real_stage_list_order():
-    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "scoresheet"]
+    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "audio", "scoresheet"]
+
+
+def test_audio_stage_wiring(tmp_path):
+    stage = next(s for s in rr.STAGES if s.name == "audio")
+    assert stage.needs == ("sync",) and stage.needs_two_cameras
+    assert stage.outputs(None) == ["audio_signals.json", "music_spans.json"]
+    ctx = rr.Context(tmp_path, {"detection": {"fps": 10, "width": 960, "audio_weight": 0}}, rr.Reporter(),
+                     use_cache=False)
+    argv = rr.audio_argv(ctx)
+    assert argv[1].endswith("audio_signals.py") and argv[2] == str(tmp_path)
+    assert argv[argv.index("--fps") + 1] == "10" and argv[argv.index("--width") + 1] == "960"
+    assert "--no-cache" in argv and "--flow_audio" not in argv
+    fp = stage.fingerprint(ctx)
+    assert set(fp) >= {"manifests", "files", "music_stack", "scripts"}
+
+
+def _audio_result(tmp_path, monkeypatch, rc, lines):
+    ctx = rr.Context(tmp_path, {}, rr.Reporter())
+
+    def fake_run(argv, on_line=None):
+        for ln in lines:
+            if on_line:
+                on_line(ln)
+        return rc, lines
+
+    monkeypatch.setattr(ctx, "run_cmd", fake_run)
+    return rr._run_audio(ctx)
+
+
+def test_audio_stage_flags_missing_music_stack(tmp_path, monkeypatch):
+    res = _audio_result(tmp_path, monkeypatch, 0, [
+        "[audio] decoded 10/20 s",
+        "[audio] 5 whistles, 2 stoppages, 0 music spans (0 s muted)",
+        "[audio] flag: needs the optional ML stack (pip install -r requirements-ml.txt)"])
+    assert res.state == "flagged" and "ML stack" in res.flags[0]
+    assert res.message.startswith("5 whistles")
+    assert not res.fatal
+
+
+def test_audio_stage_done_and_failed(tmp_path, monkeypatch):
+    res = _audio_result(tmp_path, monkeypatch, 0, ["[audio] 1 whistles, 0 stoppages, 0 music spans (0 s muted)"])
+    assert res.state == "done"
+    res = _audio_result(tmp_path, monkeypatch, 1, ["[audio] no camera audio could be read: x"])
+    assert res.state == "failed" and not res.fatal
 
 
 def test_detection_argv_uses_options_and_signal_cache(tmp_path):
