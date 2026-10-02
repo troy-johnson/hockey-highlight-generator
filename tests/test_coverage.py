@@ -230,6 +230,28 @@ def test_coverage_gaps_flags_and_defenders():
     assert cov["cam2"]["periods"][3]["fraction"] == 0.0
 
 
+def test_manifest_layout_relative_paths_use_base():
+    lines = ["ffconcat version 1.0", "file 'A.MP4'"]
+    lay = C.manifest_layout(lines, {"/g/A.MP4": 100.0}, "/g")
+    assert lay[0]["end"] == 100.0
+
+
+def test_chapter_at_block_end_gives_last_file_end():
+    lay = C.manifest_layout(["file '/g/A.MP4'", "file '/g/B.MP4'"], {"/g/A.MP4": 100.0, "/g/B.MP4": 50.0})
+    assert C.chapter_at(lay, 150.0) == ("B.MP4", 50.0)
+
+
+def test_coverage_defender_follows_camera_number_not_list_position():
+    periods = [{"n": 1, "start": 0.0, "end": 100.0}]
+    cov, _ = C.coverage({"cam2": [(0.0, 100.0)]}, periods, 3)
+    assert cov["cam2"]["periods"][0]["defender"] == "B"
+
+
+def test_league_period_length_without_count_is_not_full_league_timing():
+    t = C.league_timing({"period_minutes": 15})
+    assert t["periods"] == 3 and t["period_s"] == 900.0 and t["source"] != "League"
+
+
 def test_coverage_short_gap_is_not_flagged():
     periods = [{"n": 1, "start": 0.0, "end": 100.0}]
     _, flags = C.coverage({"cam1": [(0.0, 80.0)]}, periods, 3)

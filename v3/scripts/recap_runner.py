@@ -485,18 +485,22 @@ def _fp_coverage(ctx):
     return {"audio_signals": _file_hash(root / "audio_signals.json"),
             "manifests": [_file_hash(root / f"cam{i}_concat.txt") for i in (1, 2)],
             "files": [file_identity(p) for p in camera_files(root)],
-            "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280), "rois": _file_hash(root / "rois.json")},
+            "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280), "rois": _file_hash(root / "rois.json"),
+                     "audio": float(s.get("audio_weight", 0) or 0) > 0},
             "league": league_timing_rules(ctx),
             "goalie_stack": _goalie_stack_present(),
             "scripts": [_file_hash(HERE / "coverage.py"), _file_hash(HERE / "audio_signals.py"),
-                        _file_hash(HERE / "auto_roi.py")]}
+                        _file_hash(HERE / "auto_roi.py"), _file_hash(V2 / "signals.py")]}
 
 
 def coverage_argv(ctx) -> list[str]:
     s = _detection_settings(ctx)
-    return [ctx.python, str(HERE / "coverage.py"), str(ctx.game_folder),
+    argv = [ctx.python, str(HERE / "coverage.py"), str(ctx.game_folder),
             "--fps", str(s.get("fps", 12)), "--width", str(s.get("width", 1280)),
             "--league", json.dumps(league_timing_rules(ctx), sort_keys=True)]
+    if float(s.get("audio_weight", 0) or 0) > 0:
+        argv.append("--flow_audio")
+    return argv
 
 
 _COVERAGE_SUMMARY = re.compile(r"\[coverage\] (\d+ periods? .*)")

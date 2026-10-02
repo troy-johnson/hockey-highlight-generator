@@ -4,7 +4,8 @@ Coverage and period structure (hhg-3r5.30, spec 002 §5.3).
 
 Finds the game start, the breaks between periods, the period starts, the game
 end, and each camera's coverage of each period. Reads the outputs and caches
-of earlier stages; it does not decode the audio again.
+of earlier stages. It decodes the audio again only when the audio cache is
+missing (for example after an audio run with --no-cache).
 
 Inputs (Game Folder):
   audio_signals.json            whistles (detection timeline)
@@ -265,7 +266,8 @@ def league_timing(rules: dict | None) -> dict:
             out["source"] = "League"
         if rules.get("period_minutes"):
             out["period_s"] = float(rules["period_minutes"]) * 60.0
-            out["source"] = "League"
+            if out["source"] != "League":
+                out["source"] = "League (period count assumed)"
         if rules.get("clock") in ("running", "stop"):
             out["clock"] = rules["clock"]
         if rules.get("break_minutes") is not None:
@@ -368,7 +370,8 @@ def plan_periods(cands: list[dict], start: float, act_max: np.ndarray, signal_en
                 if a["start"] not in seen or tot > seen[a["start"]][1]:
                     seen[a["start"]] = (a, tot, pstart)
             ranked = sorted(seen.values(), key=lambda x: -x[1])
-            if ranked and ev["total"] > 0 and ranked[0][1] >= ucfg["alt_ratio"] * ev["total"]:
+            margin = (1.0 - ucfg["alt_ratio"]) * max(abs(ev["total"]), 0.05)
+            if ranked and ranked[0][1] >= ev["total"] - margin:
                 reasons.append(f"another break at {mmss(ranked[0][0]['start'])} scores close")
             brk = dict(c, uncertain=bool(reasons), reasons=reasons,
                        candidates=[dict(a, period_start=round(p, 1), plan_score=round(t, 3))
@@ -382,7 +385,7 @@ def plan_periods(cands: list[dict], start: float, act_max: np.ndarray, signal_en
 # Pure logic: Recording spans, chapter times, coverage
 # ---------------------------------------------------------------------------
 
-def manifest_layout(lines: list[str], durations: dict[str, float]) -> list[dict]:
+def manifest_layout(lines: list[str], durations: dict[str, float], base: str = "/") -> list[dict]:
     """
     Recording blocks of one camera on the detection timeline:
     [{"start", "end", "seek", "files": [(path, duration)]}]. 'seek' is the
@@ -401,10 +404,10 @@ def manifest_layout(lines: list[str], durations: dict[str, float]) -> list[dict]
     out = []
     for start, files in blocks:
         if start is None:
-            paths, seek = _manifest_inputs(lines, "/")
+            paths, seek = _manifest_inputs(lines, base)
             t0 = 0.0
         else:
-            paths, _ = _manifest_inputs(files, "/")
+            paths, _ = _manifest_inputs(files, base)
             seek = -start if start < 0 else 0.0
             t0 = max(start, 0.0)
         fl = [(p, float(durations.get(p, 0.0))) for p in paths]
@@ -416,12 +419,14 @@ def manifest_layout(lines: list[str], durations: dict[str, float]) -> list[dict]
 def chapter_at(layout: list[dict], t: float) -> tuple[str, float] | None:
     """(chapter file name, time in that file) for detection time t, or None when the camera has no video then."""
     for b in layout:
-        if b["start"] <= t < b["end"]:
+        if b["start"] <= t <= b["end"] and b["files"]:
             c = t - b["start"] + b["seek"]
             for p, d in b["files"]:
                 if c < d:
                     return os.path.basename(p), round(c, 2)
                 c -= d
+            p, d = b["files"][-1]
+            return os.path.basename(p), round(d, 2)
     return None
 
 
@@ -439,7 +444,8 @@ def coverage(spans: dict[str, list[tuple[float, float]]], periods: list[dict], n
     flags: list[str] = []
     out = {}
     cams = sorted(spans)
-    for ci, cam in enumerate(cams):
+    for cam in cams:
+        ci = int(cam[3:]) - 1 if cam[3:].isdigit() else 0
         rows = []
         for p in periods:
             a, b = p["start"], p["end"]
@@ -608,7 +614,7 @@ def _fps_width(root: Path) -> tuple[int, int]:
 
 
 def analyse(root: Path, league_rules: dict | None = None, goalie: bool = True, fps: int = 12,
-            width: int = 1280) -> dict:
+            width: int = 1280, flow_audio: bool = False) -> dict:
     import audio_signals as A
     flags: list[str] = []
     sig = json.loads((root / "audio_signals.json").read_text())
@@ -624,7 +630,7 @@ def analyse(root: Path, league_rules: dict | None = None, goalie: bool = True, f
         except Exception as exc:  # noqa: BLE001 - a bad camera is a flag
             flags.append(f"{cam}: audio activity could not be read ({exc})")
         try:
-            f = A._cached_flow(root, cam, manifest, fps, width, False)
+            f = A._cached_flow(root, cam, manifest, fps, width, flow_audio)
             if f is not None:
                 fs = per_second(f.astype(np.float64), fps)
                 fs[fs <= 0] = np.nan
@@ -636,7 +642,11 @@ def analyse(root: Path, league_rules: dict | None = None, goalie: bool = True, f
         lines = Path(manifest).read_text().splitlines()
         from signals import _manifest_inputs
         paths, _ = _manifest_inputs(lines, str(root))
-        layouts[cam] = manifest_layout(lines, {p: _duration(p) for p in paths})
+        durations = {p: _duration(p) for p in paths}
+        for p_, d_ in durations.items():
+            if d_ <= 0:
+                flags.append(f"{cam}: could not read the length of {os.path.basename(p_)}; coverage may be short")
+        layouts[cam] = manifest_layout(lines, durations, str(root))
         spans[cam] = [(b["start"], b["end"]) for b in layouts[cam]]
     if not act:
         raise RuntimeError("no camera audio activity; run the audio stage first")
@@ -650,6 +660,8 @@ def analyse(root: Path, league_rules: dict | None = None, goalie: bool = True, f
         start["t"] = 0.0
     if timing["source"].startswith("default"):
         flags.append(f"no League period timing; assumed {timing['periods']} periods")
+    elif timing["source"] != "League":
+        flags.append(f"no period count in the League rules; assumed {timing['periods']} periods")
     cands = break_candidates(act_max, flows, start["t"] + 120, signal_end)
     plan = plan_periods(cands, start["t"], act_max, signal_end, whistles, timing)
     flags += plan["flags"]
@@ -708,6 +720,7 @@ def main(argv=None) -> int:
     ap.add_argument("--no-goalie", action="store_true", help="skip the goalie net swap check")
     ap.add_argument("--fps", type=int, default=None)
     ap.add_argument("--width", type=int, default=None)
+    ap.add_argument("--flow_audio", action="store_true", help="detection ran with --audio_weight > 0")
     args = ap.parse_args(argv)
     root = Path(args.game_folder)
     fps, width = _fps_width(root)
@@ -716,7 +729,8 @@ def main(argv=None) -> int:
     except json.JSONDecodeError:
         rules = {}
     try:
-        out = analyse(root, rules, goalie=not args.no_goalie, fps=args.fps or fps, width=args.width or width)
+        out = analyse(root, rules, goalie=not args.no_goalie, fps=args.fps or fps, width=args.width or width,
+                      flow_audio=args.flow_audio)
     except Exception as exc:  # noqa: BLE001
         print(f"[ERROR] {exc}", flush=True)
         return 1

@@ -269,6 +269,9 @@ def test_coverage_stage_wiring(tmp_path):
         "periods": 2, "period_minutes": 20, "clock": "running", "break_minutes": 1}
     fp = stage.fingerprint(ctx)
     assert fp["league"] == rr.league_timing_rules(ctx)
+    assert "--flow_audio" not in argv and fp["flow"]["audio"] is False
+    ctx.options["detection"]["audio_weight"] = 0.3
+    assert "--flow_audio" in rr.coverage_argv(ctx)
 
 
 def _coverage_result(tmp_path, monkeypatch, rc, lines):
