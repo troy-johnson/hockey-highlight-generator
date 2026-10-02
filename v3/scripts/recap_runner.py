@@ -588,11 +588,20 @@ def assembly_outputs(ctx):
     return ["recap_assembly.json", output_name(ctx.game_folder, assembly_options(ctx), sheet)]
 
 
+def _rife_ready_cheap() -> bool:
+    # rife_ready() without importing torch: the fingerprint must stay cheap.
+    import importlib.util
+    import shutil
+    return bool(importlib.util.find_spec("torch")) and bool(shutil.which("rife-ncnn-vulkan"))
+
+
 def _fp_assembly(ctx):
     return {"inputs": {n: _file_hash(ctx.game_folder / n) for n in
-                       ("selection.json", "game_sheet.json", "cam1_concat.txt", "cam2_concat.txt")},
+                       ("selection.json", "game_sheet.json", "cam1_concat.txt", "cam2_concat.txt",
+                        "rois.json", "rois_auto.json")},
             "files": [file_identity(p) for p in camera_files(ctx.game_folder)],
             "options": assembly_options(ctx),
+            "rife": _rife_ready_cheap(),
             "scripts": [_file_hash(HERE / n) for n in ("recap_assembly.py", "coverage.py", "recap_options.py")]
                        + [_file_hash(V2 / "signals.py")]}
 

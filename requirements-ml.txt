@@ -7,6 +7,12 @@
 # The Ultralytics runtime is AGPL-3.0: fine for local use; a commercial product
 # would need an ONNX export or another runtime (see Beads hhg-x56).
 # Without this stack, run_detect.sh falls back to the interactive ROI picker.
+#
+# Replay slow motion (hhg-3r5.35): RIFE interpolation runs only on the replay block
+# and only when the footage is below 120 fps. It needs PyTorch (installed with
+# ultralytics below) plus the rife-ncnn-vulkan binary on PATH
+# (brew install rife-ncnn-vulkan). Without them, replays still render with
+# frame-duplication slow motion and the Recap is flagged "RIFE unavailable".
 ultralytics>=8.4
 
 # Scoresheet reader: Apple Vision OCR (PyObjC) + Qwen3-VL-8B 4-bit on MLX.
