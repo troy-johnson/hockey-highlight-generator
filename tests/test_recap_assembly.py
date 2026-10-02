@@ -138,7 +138,8 @@ def test_real_render_and_failure_preserves_output(tmp_path, monkeypatch):
     A.render(plan, output)
     probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(output)]))
     assert probe["streams"][0]["width"] == 1920
-    assert int(probe["streams"][0]["nb_frames"]) == plan["clips"][0]["frames"]
+    seq = plan["clips"] + plan.get("replays", [])
+    assert int(probe["streams"][0]["nb_frames"]) == sum(e["frames"] for e in seq)
     old = output.read_bytes()
     def fail(*args, **kwargs):
         raise subprocess.CalledProcessError(1, "ffmpeg")
