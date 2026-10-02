@@ -540,7 +540,8 @@ def _fp_selection(ctx):
             "caches": [file_identity(p) for p in sorted((root / CACHE_DIR).glob("*/*.npz"))
                        if not p.name.startswith("._")],
             "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280),
-                     "audio": float(s.get("audio_weight", 0) or 0) > 0},
+                     "audio": float(s.get("audio_weight", 0) or 0) > 0,
+                     "hwaccel": os.environ.get("HHG_HWACCEL", "1") != "0"},
             "league": selection_rules(ctx), "options": ctx.options.get("selection") or {},
             "scripts": [_file_hash(HERE / n) for n in
                         ("selection.py", "selection_inputs.py", "audio_signals.py", "coverage.py", "scoresheet.py")]

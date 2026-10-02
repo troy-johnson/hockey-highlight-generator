@@ -239,6 +239,149 @@ def test_close_alternative_is_flagged():
     assert "goal moment ambiguous" in result["goals"][0]["flags"]
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_goal_requires_motion_at_scoring_net(missing):
+    args = list(inputs())
+    if missing:
+        args[4].pop("cam2")
+    else:
+        args[4]["cam2"]["net"][:] = 0  # Slot motion alone cannot locate a goal at this net.
+    goal = S.select_goals(*args, options={"defender_teams": {"A": "home", "B": "away"}})["goals"][0]
+    assert goal["chosen"] is None
+    assert any("scoring-net motion" in flag for flag in goal["flags"])
+
+
+@pytest.mark.parametrize("rule", ["no game whistles", "first game whistle (no faceoff activity found after it)"])
+def test_legacy_coverage_fallback_start_is_uncertain(rule):
+    args = list(inputs())
+    args[1]["game"] = {"start_rule": rule}
+    args[2]["whistles"] = [{"t": 11.2}, {"t": 51.2}]
+    goal = S.select_goals(*args, options={"defender_teams": {"A": "home", "B": "away"}})["goals"][0]
+    assert goal["chosen"] is None
+    assert any("boundary uncertain" in flag for flag in goal["flags"])
+    assert S.selection_periods(args[1])[0]["start_uncertain"]
+
+
+def test_incomplete_period_plan_withholds_goals_without_inventing_numbering():
+    args = list(inputs())
+    args[-1]["periods"] = 3
+    args[1]["flags"] = ["found 0 of 2 breaks; check the period starts"]
+    goal = S.select_goals(*args, options={"defender_teams": {"A": "home", "B": "away"}})["goals"][0]
+    assert goal["chosen"] is None
+    assert any("period numbering" in flag for flag in goal["flags"])
+
+
+def test_duplicate_moments_do_not_reduce_confidence():
+    args = list(inputs())
+    for f in args[4].values():
+        f["net"][:] = .1
+        f["slot"][:] = .1
+        f["net"][126] = f["slot"][126] = 5  # One play at 10.5 seconds.
+    args[2]["whistles"] = [{"t": 11.2}, {"t": 12.4}]
+    goal = S.select_goals(*args, options={"defender_teams": {"A": "home", "B": "away"}})["goals"][0]
+    assert goal["chosen"]["detection_s"] == 10.5
+    assert goal["margin"] >= S.SETTINGS["minimum_margin"]
+
+
+@pytest.mark.parametrize("kind", ["whistle_null", "whistle_missing", "whistles_object", "stop_null",
+                                  "row_string", "period_start", "camera_period_n", "game_null"])
+def test_malformed_inputs_flag_instead_of_crashing(kind):
+    args = list(inputs())
+    if kind == "whistle_null":
+        args[2]["whistles"].append({"t": None})
+    elif kind == "whistle_missing":
+        args[2]["whistles"].append({"start": 3})
+    elif kind == "whistles_object":
+        args[2]["whistles"] = {"t": 1}
+    elif kind == "stop_null":
+        args[2]["stoppages"].append({"start": None, "end": 4})
+    elif kind == "row_string":
+        args[0]["goals"]["home"].append("1 5:00 #9")
+    elif kind == "period_start":
+        args[1]["periods"][0].pop("start")
+    elif kind == "camera_period_n":
+        args[1]["coverage"]["cam1"]["periods"][0].pop("n")
+    else:
+        args[1]["game"] = None
+    result = S.select_goals(*args, options={"defender_teams": {"A": "home", "B": "away"}})
+    assert len(result["goals"]) == (2 if kind == "row_string" else 1)
+    assert any("invalid" in f or "unreadable" in f for f in result["flags"])
+    if kind == "row_string":
+        assert result["goals"][-1]["sheet"] == "1 5:00 #9"
+        assert result["goals"][-1]["chosen"] is None
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("mapping", [{}, {"A": "home", "B": "home"}, {"a": "home", "b": "away"}])
+def test_invalid_explicit_mapping_has_specific_flag(mapping):
+    result = S.select_goals(*inputs(), options={"defender_teams": mapping})
+    assert result["mapping"]["source"] == "explicit"
+    assert result["mapping"]["defender_teams"] is None
+    assert "invalid defender_teams; expected A/B mapped to home/away" in result["flags"]
+
+
+def test_upstream_flags_are_kept_separate_from_selection_flags():
+    args = list(inputs())
+    args[0]["flags"] = ["sheet warning"]
+    args[1]["flags"] = ["coverage warning"]
+    result = S.select_goals(*args)
+    assert result["input_flags"] == {"scoresheet": ["sheet warning"], "coverage": ["coverage warning"]}
+    assert "sheet warning" not in result["flags"]
+    assert "coverage warning" not in result["flags"]
+
+
+def test_whistle_window_uses_reported_settings(monkeypatch):
+    monkeypatch.setitem(S.SETTINGS, "moment_before_whistle_s", [5, 10])
+    net = np.zeros(300)
+    net[120] = 10  # Six seconds before the whistle.
+    candidates = S.build_candidates({"whistles": [{"t": 18}]}, [],
+        {"cam1": {"net": net, "slot": net}}, {}, {"cam1": {"spans": [[0, 30]]}}, 10)
+    assert candidates[0]["cameras"]["cam1"]["t"] == 12
+
+
+def test_goal_list_without_team_is_preserved_but_never_assigned_a_net():
+    args = list(inputs())
+    claims = args[0]["goals"]["home"]
+    args[0]["goals"] = claims
+    result = S.select_goals(*args, options={"defender_teams": {"A": "home", "B": "away"}})
+    assert [g["sheet"] for g in result["goals"]] == claims
+    assert result["goals"][0]["chosen"] is None
+    assert any("team unavailable" in f for f in result["goals"][0]["flags"])
+
+
+def test_bad_team_names_and_scalar_flags_preserve_readable_claims():
+    args = list(inputs())
+    args[0]["teams"] = ["H", "A"]
+    args[0]["flags"] = "sheet warning"
+    args[1]["flags"] = "coverage warning"
+    result = S.select_goals(*args)
+    assert len(result["goals"]) == 1
+    assert result["input_flags"] == {"scoresheet": ["sheet warning"], "coverage": ["coverage warning"]}
+    assert any("teams" in f and "invalid" in f for f in result["flags"])
+
+
+def test_non_decimal_period_is_flagged():
+    args = list(inputs())
+    args[0]["goals"]["home"][0]["per"] = "²"
+    goal = S.select_goals(*args)["goals"][0]
+    assert goal["chosen"] is None and "unsupported or unreadable period" in goal["flags"]
+
+
+def test_period_count_accepts_decimal_strings_like_coverage():
+    args = list(inputs())
+    args[-1]["periods"] = "1"
+    goal = S.select_goals(*args, options={"defender_teams": {"A": "home", "B": "away"}})["goals"][0]
+    assert goal["chosen"] is not None
+
+
+def test_invalid_league_period_count_names_the_invalid_rule():
+    args = list(inputs())
+    args[-1]["periods"] = "three"
+    result = S.select_goals(*args)
+    assert any("invalid League periods" in f for f in result["flags"])
+    assert result["goals"][0]["chosen"] is None
+
+
 def test_recording_placement_leaves_nan_gaps():
     out = I.place([(0, np.ones(2)), (4, np.full(2, 2))], 1)
     assert np.isnan(out[2:4]).all() and out.tolist()[:2] == [1, 1]
@@ -292,6 +435,14 @@ def test_selection_stage_reports_flags_without_stopping(tmp_path, monkeypatch):
     monkeypatch.setattr(ctx, "run_cmd", run)
     result = rr._run_selection(ctx)
     assert result.state == "flagged" and result.flags == ["cache unavailable"] and not result.fatal
+
+
+def test_selection_fingerprint_tracks_flow_cache_hardware_mode(tmp_path, monkeypatch):
+    ctx = rr.Context(tmp_path, {}, rr.Reporter())
+    monkeypatch.setenv("HHG_HWACCEL", "1")
+    before = rr._fp_selection(ctx)
+    monkeypatch.setenv("HHG_HWACCEL", "0")
+    assert rr._fp_selection(ctx) != before
 
 
 def test_failed_output_write_preserves_previous_selection(tmp_path, monkeypatch):

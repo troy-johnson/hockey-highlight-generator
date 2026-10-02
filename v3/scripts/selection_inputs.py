@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,108 @@ def read_json(path: Path, flags: list[str]) -> dict:
     except (OSError, ValueError) as exc:
         flags.append(f"{path.name}: missing or unreadable ({exc})")
         return {}
+
+
+def finite_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def input_list(value, name: str, flags: list[str]) -> list:
+    if isinstance(value, list):
+        return value
+    flags.append(f"{name}: invalid list")
+    return []
+
+
+def checked_flags(value, name: str, flags: list[str]) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        flags.append(f"{name}: invalid flags list")
+        value = [value]
+    return [str(v) for v in value]
+
+
+def checked_sheet(sheet: dict, flags: list[str]) -> dict:
+    result = dict(sheet)
+    result["flags"] = checked_flags(sheet.get("flags"), "scoresheet", flags)
+    if not isinstance(sheet.get("teams", {}), dict):
+        flags.append("scoresheet teams: invalid object")
+        result["teams"] = {}
+    goals = sheet.get("goals", {})
+    if not isinstance(goals, dict):
+        flags.append("scoresheet goals: invalid object; team unavailable")
+        # Preserve claims without guessing which team scored them.
+        result["goals"] = {"unknown": goals if isinstance(goals, list) else [goals]}
+    return result
+
+
+def checked_audio(audio: dict, flags: list[str]) -> dict:
+    """Keep indices stable so stoppage references cannot move to another row."""
+    result = dict(audio)
+    for name, keys in (("whistles", ("t",)), ("stoppages", ("start", "end"))):
+        rows = input_list(audio.get(name, []), f"audio {name}", flags)
+        result[name] = []
+        for i, row in enumerate(rows):
+            valid = isinstance(row, dict) and all(finite_number(row.get(k)) for k in keys)
+            if valid and name == "stoppages":
+                valid = row["end"] >= row["start"]
+            if not valid:
+                flags.append(f"audio {name}[{i}]: invalid time; ignored")
+            result[name].append(row if valid else {})
+    return result
+
+
+def checked_structure(structure: dict, flags: list[str]) -> dict:
+    """Reject unreadable boundaries instead of assigning them invented times."""
+    result = dict(structure)
+    result["flags"] = checked_flags(structure.get("flags"), "coverage", flags)
+    if not isinstance(structure.get("league_timing", {}), dict):
+        flags.append("coverage league_timing: invalid object")
+        result["league_timing"] = {}
+    game = structure.get("game", {})
+    if not isinstance(game, dict):
+        flags.append("coverage game: invalid object")
+        game = {"start_uncertain": True, "end_uncertain": True}
+    result["game"] = game
+    periods = []
+    for row in input_list(structure.get("periods", []), "coverage periods", flags):
+        if (not isinstance(row, dict) or type(row.get("n")) is not int or row["n"] < 1
+                or not all(finite_number(row.get(k)) for k in ("start", "end"))
+                or row["end"] <= row["start"]):
+            flags.append("coverage period: invalid number or bounds")
+            continue
+        row = dict(row)
+        if row.get("break_before") is not None and not isinstance(row["break_before"], dict):
+            flags.append(f"coverage period {row['n']}: invalid break")
+            row["break_before"] = {"uncertain": True}
+        periods.append(row)
+    result["periods"] = periods
+    cameras = structure.get("coverage", {})
+    if not isinstance(cameras, dict):
+        flags.append("coverage cameras: invalid object")
+        cameras = {}
+    result["coverage"] = {}
+    for cam, value in cameras.items():
+        if not isinstance(value, dict):
+            flags.append(f"{cam}: invalid coverage")
+            continue
+        spans = []
+        for span in input_list(value.get("spans", []), f"{cam} spans", flags):
+            if (isinstance(span, list) and len(span) == 2 and all(finite_number(v) for v in span)
+                    and span[1] > span[0]):
+                spans.append(span)
+            else:
+                flags.append(f"{cam}: invalid coverage span")
+        camera_periods = []
+        for p in input_list(value.get("periods", []), f"{cam} periods", flags):
+            if (isinstance(p, dict) and type(p.get("n")) is int and p["n"] > 0
+                    and p.get("defender") in ("A", "B", None)):
+                camera_periods.append(p)
+            else:
+                flags.append(f"{cam}: invalid period or defender")
+        result["coverage"][cam] = dict(value, spans=spans, periods=camera_periods)
+    return result
 
 
 def place(parts: list[tuple[float, np.ndarray]], rate: float) -> np.ndarray:
