@@ -207,7 +207,7 @@ def test_batch_one_failed_game_does_not_stop_the_others(tmp_path):
 
 
 def test_real_stage_list_order():
-    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "audio", "scoresheet"]
+    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "audio", "coverage", "scoresheet"]
 
 
 def test_audio_stage_wiring(tmp_path):
@@ -251,6 +251,47 @@ def test_audio_stage_done_and_failed(tmp_path, monkeypatch):
     res = _audio_result(tmp_path, monkeypatch, 0, ["[audio] 1 whistles, 0 stoppages, 0 music spans (0 s muted)"])
     assert res.state == "done"
     res = _audio_result(tmp_path, monkeypatch, 1, ["[audio] no camera audio could be read: x"])
+    assert res.state == "failed" and not res.fatal
+
+
+def test_coverage_stage_wiring(tmp_path):
+    stage = next(s for s in rr.STAGES if s.name == "coverage")
+    assert set(stage.needs) == {"audio", "detection"} and stage.needs_two_cameras
+    assert stage.outputs(None) == ["coverage.json"]
+    rules = {"periods": 2, "period_minutes": 20, "clock": "running", "break_minutes": 1, "penalty": 2}
+    ctx = rr.Context(tmp_path, {"detection": {"fps": 10, "width": 960}, "league_rules": rules},
+                     rr.Reporter())
+    argv = rr.coverage_argv(ctx)
+    assert argv[1].endswith("coverage.py") and argv[2] == str(tmp_path)
+    assert argv[argv.index("--fps") + 1] == "10" and argv[argv.index("--width") + 1] == "960"
+    import json
+    assert json.loads(argv[argv.index("--league") + 1]) == {
+        "periods": 2, "period_minutes": 20, "clock": "running", "break_minutes": 1}
+    fp = stage.fingerprint(ctx)
+    assert fp["league"] == rr.league_timing_rules(ctx)
+
+
+def _coverage_result(tmp_path, monkeypatch, rc, lines):
+    ctx = rr.Context(tmp_path, {}, rr.Reporter())
+
+    def fake_run(argv, on_line=None):
+        for ln in lines:
+            if on_line:
+                on_line(ln)
+        return rc, lines
+
+    monkeypatch.setattr(ctx, "run_cmd", fake_run)
+    return rr._run_coverage(ctx)
+
+
+def test_coverage_stage_flags_done_and_failed(tmp_path, monkeypatch):
+    summary = "[coverage] 3 periods (starts 6:15, 26:38, 46:56), game 6:15-66:53"
+    res = _coverage_result(tmp_path, monkeypatch, 0, [
+        summary, "[coverage] flag: no League period timing; assumed 3 periods"])
+    assert res.state == "flagged" and "League" in res.flags[0] and not res.fatal
+    assert res.message.startswith("3 periods")
+    assert _coverage_result(tmp_path, monkeypatch, 0, [summary]).state == "done"
+    res = _coverage_result(tmp_path, monkeypatch, 1, ["[ERROR] audio_signals.json is missing"])
     assert res.state == "failed" and not res.fatal
 
 

@@ -468,6 +468,59 @@ def _run_audio(ctx):
     return StageResult("flagged" if flags else "done", flags, summary[0] or "audio_signals.json written")
 
 
+def _goalie_stack_present() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("ultralytics") is not None
+
+
+def league_timing_rules(ctx) -> dict:
+    """The League keys that the coverage stage reads (period timing)."""
+    rules = ctx.options.get("league_rules") or {}
+    return {k: rules[k] for k in ("periods", "period_minutes", "clock", "break_minutes") if k in rules}
+
+
+def _fp_coverage(ctx):
+    root = ctx.game_folder
+    s = _detection_settings(ctx)
+    return {"audio_signals": _file_hash(root / "audio_signals.json"),
+            "manifests": [_file_hash(root / f"cam{i}_concat.txt") for i in (1, 2)],
+            "files": [file_identity(p) for p in camera_files(root)],
+            "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280), "rois": _file_hash(root / "rois.json")},
+            "league": league_timing_rules(ctx),
+            "goalie_stack": _goalie_stack_present(),
+            "scripts": [_file_hash(HERE / "coverage.py"), _file_hash(HERE / "audio_signals.py"),
+                        _file_hash(HERE / "auto_roi.py")]}
+
+
+def coverage_argv(ctx) -> list[str]:
+    s = _detection_settings(ctx)
+    return [ctx.python, str(HERE / "coverage.py"), str(ctx.game_folder),
+            "--fps", str(s.get("fps", 12)), "--width", str(s.get("width", 1280)),
+            "--league", json.dumps(league_timing_rules(ctx), sort_keys=True)]
+
+
+_COVERAGE_SUMMARY = re.compile(r"\[coverage\] (\d+ periods? .*)")
+_COVERAGE_FLAG = re.compile(r"\[coverage\] flag: (.+)")
+
+
+def _run_coverage(ctx):
+    summary, flags = [""], []
+
+    def on_line(line: str):
+        m = _COVERAGE_FLAG.search(line)
+        if m:
+            flags.append(m.group(1))
+            return
+        m = _COVERAGE_SUMMARY.search(line)
+        if m:
+            summary[0] = m.group(1)
+
+    rc, lines = ctx.run_cmd(coverage_argv(ctx), on_line)
+    if rc != 0:
+        return StageResult("failed", [f"coverage failed: {_last_error(lines)}"], _last_error(lines))
+    return StageResult("flagged" if flags else "done", flags, summary[0] or "coverage.json written")
+
+
 STAGES: list[Stage] = [
     Stage("discovery", "Find cameras and Recordings", _fp_discovery, lambda c: ["chapters.json"], _run_discovery),
     Stage("sync", "Sync cameras", _fp_sync,
@@ -481,6 +534,9 @@ STAGES: list[Stage] = [
     Stage("audio", "Find whistles, stoppages, PA music", _fp_audio,
           lambda c: ["audio_signals.json", "music_spans.json"], _run_audio,
           needs=("sync",), needs_two_cameras=True),
+    Stage("coverage", "Find periods, game start and end, coverage", _fp_coverage,
+          lambda c: ["coverage.json"], _run_coverage,
+          needs=("audio", "detection"), needs_two_cameras=True),
     Stage("scoresheet", "Read Scoresheet / GameSheet", _fp_scoresheet, lambda c: ["game_sheet.json"],
           _run_scoresheet),
 ]
