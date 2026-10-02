@@ -53,6 +53,21 @@ One command turns a Game Folder into a finished **Recap** and a **Short**, with 
 
 The review page writes corrections back to the per-game file.
 
+League JSON uses these timing keys:
+- `periods`: the number of regulation periods.
+- `period_minutes`: the length of each period.
+- `clock`: `stop` or `running`.
+- `time_direction`: `remaining` or `elapsed`, as written on the Scoresheet.
+- `break_minutes`: the expected break between periods.
+
+Selection requires `period_minutes`, `clock`, and `time_direction` to interpret sheet times.
+Missing clock rules produce a review flag and `no clip found` for each affected goal.
+For example, a 13-minute stop-clock League uses:
+
+```json
+{"periods": 3, "period_minutes": 13, "clock": "stop", "time_direction": "remaining", "break_minutes": 1}
+```
+
 **Progress and status**
 - The terminal shows a stage list with checkmarks, a progress bar with elapsed time and an estimate of time left, and the flags found so far (Python `rich`, MIT license).
 - The run writes a status file in the Game Folder, which `status` reads.
