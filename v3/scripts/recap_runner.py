@@ -574,6 +574,44 @@ def _run_selection(ctx):
     return StageResult("flagged" if flags else "done", flags, summary[0] or "selection.json written")
 
 
+def assembly_options(ctx):
+    options = {k: ctx.options[k] for k in ("date", "focus_team", "live_play_speed") if k in ctx.options}
+    team = (ctx.options.get("teams") or {}).get(options.get("focus_team"), {})
+    if team.get("name"):
+        options["focus_team"] = team["name"]
+    return options
+
+
+def assembly_outputs(ctx):
+    from recap_assembly import output_name
+    sheet = json.loads((ctx.game_folder / "game_sheet.json").read_text())
+    return ["recap_assembly.json", output_name(ctx.game_folder, assembly_options(ctx), sheet)]
+
+
+def _fp_assembly(ctx):
+    return {"inputs": {n: _file_hash(ctx.game_folder / n) for n in
+                       ("selection.json", "game_sheet.json", "cam1_concat.txt", "cam2_concat.txt")},
+            "files": [file_identity(p) for p in camera_files(ctx.game_folder)],
+            "options": assembly_options(ctx),
+            "scripts": [_file_hash(HERE / n) for n in ("recap_assembly.py", "coverage.py", "recap_options.py")]
+                       + [_file_hash(V2 / "signals.py")]}
+
+
+def _run_assembly(ctx):
+    flags, summary = [], [""]
+    def on_line(line):
+        if line.startswith("[assembly] flag: "):
+            flags.append(line.removeprefix("[assembly] flag: "))
+        elif line.startswith("[assembly] "):
+            summary[0] = line.removeprefix("[assembly] ")
+    argv = [ctx.python, str(HERE / "recap_assembly.py"), str(ctx.game_folder),
+            "--options", json.dumps(assembly_options(ctx))]
+    rc, lines = ctx.run_cmd(argv, on_line)
+    if rc != 0:
+        return StageResult("failed", [f"assembly failed: {_last_error(lines)}"], _last_error(lines))
+    return StageResult("flagged" if flags else "done", flags, summary[0])
+
+
 STAGES: list[Stage] = [
     Stage("discovery", "Find cameras and Recordings", _fp_discovery, lambda c: ["chapters.json"], _run_discovery),
     Stage("sync", "Sync cameras", _fp_sync,
@@ -594,6 +632,8 @@ STAGES: list[Stage] = [
           _run_scoresheet),
     Stage("selection", "Locate Game Sheet goals", _fp_selection, lambda c: ["selection.json"],
           _run_selection, needs=("coverage", "scoresheet", "audio", "detection")),
+    Stage("assembly", "Render plain Recap", _fp_assembly, assembly_outputs,
+          _run_assembly, needs=("selection",)),
 ]
 
 STAGE_NAMES = [s.name for s in STAGES]
