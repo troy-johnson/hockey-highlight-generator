@@ -525,6 +525,54 @@ def _run_coverage(ctx):
     return StageResult("flagged" if flags else "done", flags, summary[0] or "coverage.json written")
 
 
+def selection_rules(ctx) -> dict:
+    rules = ctx.options.get("league_rules") or {}
+    return {k: rules[k] for k in ("periods", "period_minutes", "clock", "time_direction") if k in rules}
+
+
+def _fp_selection(ctx):
+    root = ctx.game_folder
+    s = _detection_settings(ctx)
+    return {"inputs": {n: _file_hash(root / n) for n in
+                       ("game_sheet.json", "coverage.json", "audio_signals.json", "events.csv", "music_spans.json",
+                        "rois.json", "cam1_concat.txt", "cam2_concat.txt")},
+            "files": [file_identity(p) for p in camera_files(root)],
+            "caches": [file_identity(p) for p in sorted((root / CACHE_DIR).glob("*/*.npz"))
+                       if not p.name.startswith("._")],
+            "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280),
+                     "audio": float(s.get("audio_weight", 0) or 0) > 0},
+            "league": selection_rules(ctx), "options": ctx.options.get("selection") or {},
+            "scripts": [_file_hash(HERE / n) for n in
+                        ("selection.py", "selection_inputs.py", "audio_signals.py", "coverage.py", "scoresheet.py")]
+                       + [_file_hash(V2 / "signals.py")]}
+
+
+def selection_argv(ctx) -> list[str]:
+    s = _detection_settings(ctx)
+    argv = [ctx.python, str(HERE / "selection.py"), str(ctx.game_folder),
+            "--fps", str(s.get("fps", 12)), "--width", str(s.get("width", 1280)),
+            "--league", json.dumps(selection_rules(ctx), sort_keys=True),
+            "--options", json.dumps(ctx.options.get("selection") or {}, sort_keys=True)]
+    if float(s.get("audio_weight", 0) or 0) > 0:
+        argv.append("--flow_audio")
+    return argv
+
+
+def _run_selection(ctx):
+    summary, flags = [""], []
+
+    def on_line(line: str):
+        if line.startswith("[selection] flag: "):
+            flags.append(line.removeprefix("[selection] flag: "))
+        elif line.startswith("[selection] "):
+            summary[0] = line.removeprefix("[selection] ")
+
+    rc, lines = ctx.run_cmd(selection_argv(ctx), on_line)
+    if rc != 0:
+        return StageResult("failed", [f"selection failed: {_last_error(lines)}"], _last_error(lines))
+    return StageResult("flagged" if flags else "done", flags, summary[0] or "selection.json written")
+
+
 STAGES: list[Stage] = [
     Stage("discovery", "Find cameras and Recordings", _fp_discovery, lambda c: ["chapters.json"], _run_discovery),
     Stage("sync", "Sync cameras", _fp_sync,
@@ -543,6 +591,8 @@ STAGES: list[Stage] = [
           needs=("audio", "detection"), needs_two_cameras=True),
     Stage("scoresheet", "Read Scoresheet / GameSheet", _fp_scoresheet, lambda c: ["game_sheet.json"],
           _run_scoresheet),
+    Stage("selection", "Locate Game Sheet goals", _fp_selection, lambda c: ["selection.json"],
+          _run_selection, needs=("coverage", "scoresheet", "audio", "detection")),
 ]
 
 STAGE_NAMES = [s.name for s in STAGES]
