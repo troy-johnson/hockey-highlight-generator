@@ -13,12 +13,15 @@ The plain Recap is silent. Graphics, replays, framing, music, and non-goal plays
 It can be much shorter than three minutes. Its maximum duration is four minutes.
 
 Each selected goal uses its scoring camera. The default live speed is 1.1×.
-Build-up and celebration follow the goal-count tiers in spec 002 §5.8.
+Build-up and celebration follow the tiers in spec 002 §5.8, counted by selected goals.
 Selection finds an action moment, not an exact puck crossing.
-The cut retains three seconds of goal action before its celebration allowance.
-Selection bounds can limit both allowances.
-The four-minute limit reduces context when necessary, while keeping every selected goal.
+The cut retains three seconds of goal action, then the tier's celebration allowance.
+Recording coverage can trim either end; the clip is flagged when that happens.
+The four-minute limit shortens build-up first, never the three seconds of goal action.
+If the cap still cannot be met, the stage fails instead of dropping goals.
+A clip whose chapter decodes shorter than its manifest duration is flagged and omitted.
 
 Unmatched goals remain flagged and have no clip. The stage does not invent replacement footage.
+An older Recap with a different name is kept and flagged, not deleted.
 Review the video before publication, particularly its goal cuts and unmatched goals.
 The render replaces an existing video only after ffprobe confirms its duration.
