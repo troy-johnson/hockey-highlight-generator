@@ -82,6 +82,8 @@ game_folder/
   recap_options.json ← per-game options (hockeyrecap); inferred values marked
   recap_status.json  ← stage states, fingerprints, flags (hockeyrecap status)
   recap.log          ← full log of all stage output
+  recap_assembly.json ← plain Recap source cuts, frame counts, speed, flags
+  YYYY-MM-DD_Team-vs-Opponent_Recap.mp4 ← plain silent Recap (assembly stage)
   recording_check.json ← hockeyrecap check report
   recap_previous/    ← copies of outputs from older tools, before first overwrite
   .recap_cache/signals/ ← flow signals per Recording (.npz); old keys are not pruned

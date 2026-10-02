@@ -7,7 +7,8 @@ hockeyrecap: one command from a Game Folder to the pipeline outputs (spec 002 §
   hockeyrecap status <game_folder>                      show recap_status.json
   hockeyrecap check <game_folder> [...]                 quick Recording check (a few minutes)
 
-Stages: discovery, sync, rois, detection, audio, scoresheet. Options come from four
+Stages: discovery, sync, rois, detection, audio, coverage, scoresheet, selection,
+assembly. Options come from four
 layers, each over the one before: League, Team Config (~/hockey), the per-game
 file recap_options.json, and the flags of this command.
 """
