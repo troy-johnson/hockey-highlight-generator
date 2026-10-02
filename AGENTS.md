@@ -77,6 +77,8 @@ game_folder/
   events.csv / markers.csv
   audio_signals.json ← whistles + stoppages, detection timeline (audio_signals.py)
   music_spans.json   ← YAMNet PA music spans per camera (mute/review)
+  coverage.json      ← periods, breaks + candidates, game start/end, coverage
+                       per camera, detection timeline (coverage.py)
   recap_options.json ← per-game options (hockeyrecap); inferred values marked
   recap_status.json  ← stage states, fingerprints, flags (hockeyrecap status)
   recap.log          ← full log of all stage output
