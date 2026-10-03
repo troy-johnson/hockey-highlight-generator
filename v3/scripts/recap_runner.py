@@ -696,6 +696,51 @@ def _run_mix(ctx):
     return StageResult("flagged" if flags else "done", flags, summary[0])
 
 
+def graphics_options(ctx) -> dict:
+    return json.loads(json.dumps({k: ctx.options.get(k) for k in
+                                 ("teams", "focus_team", "perspective", "_layers")}))
+
+
+def _graphics_outputs(ctx):
+    from recap_graphics import graphics_output_name
+    return ["recap_graphics_props.json", "recap_graphics.json", graphics_output_name(_mix_plan_output(ctx))]
+
+
+def _fp_graphics(ctx):
+    from recap_graphics import PACKAGE, logo_path
+    root = ctx.game_folder
+    video = _mix_outputs(ctx)[1]
+    inputs: dict = {name: _file_hash(root / name) for name in
+              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_sheet.json")}
+    inputs[video] = file_identity(root / video)
+    options = graphics_options(ctx)
+    logos = {}
+    for key, team in (options.get("teams") or {}).items():
+        if team.get("logo"):
+            logos[key] = _file_hash(logo_path(team["logo"], options))
+    sources = [HERE / "recap_graphics.py", HERE / "audio_mix.py", PACKAGE / "render.mjs",
+               PACKAGE / "package.json", PACKAGE / "package-lock.json"]
+    sources.extend(sorted((PACKAGE / "src").glob("*")))
+    sources.extend(sorted((PACKAGE / "public").glob("*")))
+    return {"inputs": inputs, "options": options, "logos": logos,
+            "scripts": {str(p): _file_hash(p) for p in sources if not p.is_dir()}}
+
+
+def _run_graphics(ctx):
+    flags, summary = [], [""]
+    def on_line(line):
+        if line.startswith("[graphics] flag: "):
+            flags.append(line.removeprefix("[graphics] flag: "))
+        elif line.startswith("[graphics] "):
+            summary[0] = line.removeprefix("[graphics] ")
+    argv = [ctx.python, str(HERE / "recap_graphics.py"), str(ctx.game_folder),
+            "--options", json.dumps(graphics_options(ctx))]
+    rc, lines = ctx.run_cmd(argv, on_line)
+    if rc:
+        return StageResult("failed", [f"graphics failed: {_last_error(lines)}"], _last_error(lines))
+    return StageResult("flagged" if flags else "done", flags, summary[0])
+
+
 STAGES: list[Stage] = [
     Stage("discovery", "Find cameras and Recordings", _fp_discovery, lambda c: ["chapters.json"], _run_discovery),
     Stage("sync", "Sync cameras", _fp_sync,
@@ -720,6 +765,8 @@ STAGES: list[Stage] = [
           _run_assembly, needs=("selection",)),
     Stage("mix", "Mix Recap audio", _fp_mix, _mix_outputs, _run_mix,
           needs=("assembly",)),
+    Stage("graphics", "Overlay Recap graphics", _fp_graphics, _graphics_outputs, _run_graphics,
+          needs=("mix",)),
 ]
 
 STAGE_NAMES = [s.name for s in STAGES]

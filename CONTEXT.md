@@ -57,7 +57,7 @@ _Avoid_: Branding, Theme
 **Perspective**: Whose story a Recap tells — Neutral, or focused on one of the two teams. Chosen per game.
 _Avoid_: Mode, Side, Bias
 
-**Focus Team**: The team a focused Recap is about — usually one of the user's own teams (Ice Pak or another team they play on). Its brand leads the open, stingers, and watermark; its players fill the FINAL card and the Short. The default when exactly one team in the game is one of the user's teams.
+**Focus Team**: The team a focused Recap is about — usually one of the user's own teams (Ice Pak or another team they play on). Its brand leads the open, stingers, and watermark; its players fill the Short. The FINAL card includes both teams. The default when exactly one team in the game is one of the user's teams.
 _Avoid_: Home team, Our team, Primary team
 
 **Scoresheet**: The official paper game sheet — photographed or scanned and dropped into the Game Folder. Its jersey numbers are not always correct.
