@@ -86,12 +86,8 @@ def build_timeline(plan: dict) -> list[dict]:
     replays, with output positions. `frames / FPS` is the exact piece length,
     as in recap_assembly.render().
     """
-    clips = list(plan.get("clips") or [])
-    replays = list(plan.get("replays") or [])
-    sequence: list[dict] = []
-    for clip in clips:
-        sequence.append(clip)
-        sequence.extend(r for r in replays if r.get("goal_id") == clip.get("goal_id"))
+    from recap_assembly import recap_sequence
+    sequence = recap_sequence(plan)
     tl: list[dict] = []
     out = 0.0
     for entry in sequence:
@@ -167,9 +163,11 @@ def plan_cues(entries: list[dict], perspective: str = "neutral", focus_side: str
         c.update(extra)
         cues.append(c)
 
-    add("game_start", 0.0)
+    opening = next((e for e in entries if e.get("kind") == "stinger"), None)
+    open_t = opening["out_start"] if opening else 0.0
+    add("game_start", open_t)
     if perspective == "neutral":
-        add("sting_neutral", 0.0)
+        add("sting_neutral", open_t)
     for e in entries:
         if e.get("kind") == "goal":
             side = goal_side(e)
@@ -283,8 +281,10 @@ def plan_bed(tl: list[dict], periods: list[dict], beds: list[dict], rotation_key
         return []
     total = sum(e["out_dur"] for e in tl)
     runs: list[tuple[int, list[dict]]] = []
+    first_play = next((e for e in tl if e.get("kind") not in ("cold_open", "stinger")), tl[0])
     for e in tl:
-        per = period_of(float(e.get("moment_s") or e.get("start_s") or 0.0), periods)
+        source = first_play if e.get("kind") in ("cold_open", "stinger") else e
+        per = period_of(float(source.get("moment_s") or source.get("start_s") or 0.0), periods)
         if runs and runs[-1][0] == per:
             runs[-1][1].append(e)
         else:

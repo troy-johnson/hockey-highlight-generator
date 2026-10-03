@@ -242,7 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--focus-team", dest="focus_team")
         sp.add_argument("--perspective", choices=("focus", "neutral"))
         sp.add_argument("--live-play-speed", dest="live_play_speed", type=float)
-        sp.add_argument("--start", choices=("cold_open", "play"))
+        sp.add_argument("--start", choices=("stinger", "cold_open", "play"))
 
     add_run_options(sub.add_parser("run", help="run or resume every stage"))
     rerun = sub.add_parser("rerun", help="run one stage and every later stage again")

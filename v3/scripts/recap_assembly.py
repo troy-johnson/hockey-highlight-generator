@@ -252,7 +252,9 @@ def _trim_context(clips: list[dict], side: str, floor_s: float, over_s: float) -
 
 
 def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | None = None,
-               source_fps: dict | None = None, horizon: dict | None = None) -> dict:
+               source_fps: dict | None = None, horizon: dict | None = None, start: str = "play") -> dict:
+    if start not in ("stinger", "cold_open", "play"):
+        raise ValueError("start must be stinger, cold_open, or play")
     if not math.isfinite(speed) or not .25 <= speed <= 4:
         raise ValueError("live_play_speed must be between 0.25 and 4")
     goals = selection.get("goals") or []
@@ -416,7 +418,9 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
     goal_frames = sum(math.ceil((c["end_s"] - c["start_s"]) / speed * FPS) for c in clips)
     total_frames = goal_frames + sum(r["frames"] for r in replays) + sum(
         math.ceil((c["end_s"] - c["start_s"]) / speed * FPS) for c in play_clips)
-    fill_target_frames = FILL_TARGET_S * FPS
+    opening_budget = 75 + (180 if start == "cold_open" else 0) if start != "play" else 0
+    max_frames = MAX_FRAMES - opening_budget
+    fill_target_frames = FILL_TARGET_S * FPS - opening_budget
     restored_ids: list[str] = []
     cut_pool = sorted(cut_goals, key=lambda g: -(g.get("interest") or 0.0))
     play_pool = list(selection.get("next_best") or [])
@@ -439,7 +443,7 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
                                  for kind, src_d in (REPLAY_SHOTS[1] if clip.get("best_goal")
                                                      else REPLAY_SHOTS[tier])) if s]
             needed = math.ceil((clip["end_s"] - clip["start_s"]) / speed * FPS) + sum(s["frames"] for s in shots)
-            if total_frames + needed > MAX_FRAMES:
+            if total_frames + needed > max_frames:
                 continue
             clips.append(clip)
             replays.extend(shots)
@@ -456,7 +460,7 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         if clip is None:
             continue
         filler_frames = math.ceil((clip["end_s"] - clip["start_s"]) / speed * FPS)
-        if total_frames + filler_frames > MAX_FRAMES:
+        if total_frames + filler_frames > max_frames:
             continue
         play_clips.append(clip)
         filler_ids.append(clip["goal_id"])
@@ -495,14 +499,14 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
     clips = kept
     frames = sum(math.ceil((c["end_s"] - c["start_s"]) / speed * FPS) for c in clips)
     total = frames + sum(r["frames"] for r in replays)
-    if total > MAX_FRAMES:
+    if total > max_frames:
         # Plays go first (spec 002 §5.8 has plays behind goals in priority):
         # they exist only because there was room. Filler plays are the purest
         # padding, so they go before chosen ones, lowest score first.
         filler_dropped = []
         for c in sorted((c for c in clips if c.get("kind") == "play" and not c.get("chosen")),
                         key=lambda c: (c["play_score"], -c["moment_s"])):
-            if total <= MAX_FRAMES:
+            if total <= max_frames:
                 break
             clips.remove(c)
             total -= c["frames"]
@@ -516,11 +520,11 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         if filler_dropped:
             flags.append(f"dropped {len(filler_dropped)} filler play(s) to fit the four-minute"
                          f" cap ({', '.join(filler_dropped)})")
-    if total > MAX_FRAMES:
+    if total > max_frames:
         chosen_dropped = []
         for c in sorted((c for c in clips if c.get("kind") == "play" and c.get("chosen")),
                         key=lambda c: (c["play_score"], -c["moment_s"])):
-            if total <= MAX_FRAMES:
+            if total <= max_frames:
                 break
             clips.remove(c)
             total -= c["frames"]
@@ -532,7 +536,7 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         if chosen_dropped:
             flags.append(f"dropped {len(chosen_dropped)} chosen play(s) to fit the four-minute"
                          f" cap ({', '.join(chosen_dropped)})")
-    if total > MAX_FRAMES:
+    if total > max_frames:
         # Shorten the replay blocks next (spec 002 §5.8): wide shots, then tight ones,
         # latest goals first. Dead goals are already gone, so no replay is dropped for
         # a goal that will not render.
@@ -541,7 +545,7 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         # their shots rank behind every other replay in the drop order.
         for r in sorted(replays, key=lambda r: (r.get("best_goal", False),
                                                 r["kind"] == "tight", -r["order"])):
-            if total <= MAX_FRAMES:
+            if total <= max_frames:
                 break
             replays.remove(r)
             total -= r["frames"]
@@ -553,12 +557,12 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
                          f"({', '.join(dropped_ids)})")
     goal_clip_count = sum(1 for c in clips if c.get("kind") == "goal")
     goal_frames = sum(c["frames"] for c in clips if c.get("kind") == "goal")
-    if goal_frames > MAX_FRAMES:
+    if goal_frames > max_frames:
         # Keep every chosen goal and the goal action. Trim build-up first, then
         # celebration. The count and the overflow come from goal clips alone:
         # plays never buy extra goal context at the cap.
         # One extra frame per clip: frame counts are rounded up after trimming.
-        over_s = (goal_frames - MAX_FRAMES + goal_clip_count) * speed / FPS
+        over_s = (goal_frames - max_frames + goal_clip_count) * speed / FPS
         goal_entries = [c for c in clips if c.get("kind") == "goal"]
         over_s -= _trim_context(goal_entries, "before", MIN_BUILD_UP_S, over_s)
         over_s -= _trim_context(goal_entries, "after", GOAL_ACTION_S, over_s)
@@ -569,18 +573,46 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         frames = sum(c["frames"] for c in clips)
         total = frames + sum(r["frames"] for r in replays)
         goal_frames = sum(c["frames"] for c in clips if c.get("kind") == "goal")
-        if goal_frames > MAX_FRAMES:
+        if goal_frames > max_frames:
             raise ValueError("too many goals for the four-minute cap")
         flags.append("goal context shortened to fit the four-minute cap")
-    if total > MAX_FRAMES:
+    if total > max_frames:
         raise ValueError("too many goals for the four-minute cap")
     live_ids = {c["goal_id"] for c in clips}
     replays = [r for r in replays if r["goal_id"] in live_ids]
-    duration = (sum(c["frames"] for c in clips) + sum(r["frames"] for r in replays)) / FPS
+    opening = []
+    if start == "cold_open":
+        interests = {g["id"]: float(g.get("interest") or 0) for g in goals}
+        for clip in clips:
+            clip["opening_interest"] = interests.get(clip["goal_id"], clip.get("play_score", 0))
+        opening.append(_cold_open(clips))
+    if start != "play":
+        opening.append({"kind": "stinger", "goal_id": "open", "frames": 75, "speed": 1,
+                        "start_s": clips[0]["start_s"], "moment_s": clips[0]["start_s"], "parts": []})
+    duration = sum(c["frames"] for c in opening + clips + replays) / FPS
     return {"schema_version": 3, "speed": speed, "fps": FPS, "audio": "silent",
-            "duration_s": duration, "clips": clips, "replays": replays,
+            "duration_s": duration, "clips": clips, "replays": replays, "opening": opening, "start": start,
             "input_flags": selection.get("flags", []),
             "flags": flags + ["plain Recap: no graphics or audio mix"]}
+
+
+def _cold_open(clips: list[dict]) -> dict:
+    """Copy the best surviving play's six-second window and chapter seeks."""
+    best = max(clips, key=lambda c: (c.get("opening_interest", 0), -c["moment_s"]))
+    speed = best["speed"]
+    teaser: dict = dict(best, kind="cold_open", source_kind=best["kind"])
+    teaser["start_s"] = max(best["start_s"], best["moment_s"] - 4 * speed)
+    teaser["end_s"] = min(best["end_s"], teaser["start_s"] + 6 * speed)
+    parts, cursor = [], best["start_s"]
+    for part in best["parts"]:
+        end = cursor + part["duration_s"]
+        first, last = max(cursor, teaser["start_s"]), min(end, teaser["end_s"])
+        if last > first:
+            parts.append(dict(part, seek_s=part["seek_s"] + first - cursor, duration_s=last - first))
+        cursor = end
+    teaser["parts"] = parts
+    teaser["frames"] = min(180, math.ceil((teaser["end_s"] - teaser["start_s"]) / speed * FPS))
+    return teaser
 
 
 def load_layouts(root: Path, cameras: set[str]) -> dict:
@@ -648,7 +680,11 @@ def verify_sources(plan: dict) -> None:
     if not kept:
         raise ValueError("no selected goals to render")
     plan["clips"], plan["replays"] = kept, replays
-    plan["duration_s"] = sum(e["frames"] for e in kept + replays) / FPS
+    opening = list(plan.get("opening", []))
+    if plan.get("start") == "cold_open":
+        opening = [_cold_open(kept)] + [e for e in opening if e["kind"] == "stinger"]
+    plan["opening"] = opening
+    plan["duration_s"] = sum(e["frames"] for e in opening + kept + replays) / FPS
 
 
 def _zoompan_filter(zoom: dict, m: int, fps: int, angle_deg: float = 0.0) -> str:
@@ -753,18 +789,30 @@ def _rife_slowmo(source: Path, dest: Path, work: Path, entry: dict,
                     str(dest)], check=True)
 
 
+def recap_sequence(plan: dict) -> list[dict]:
+    """Use one piece order for video, audio, and graphics."""
+    sequence = list(plan.get("opening") or [])
+    for clip in plan.get("clips") or []:
+        sequence.append(clip)
+        sequence.extend(r for r in plan.get("replays") or [] if r.get("goal_id") == clip.get("goal_id"))
+    return sequence
+
+
 def render(plan: dict, output: Path) -> None:
     """Render to local scratch space and replace the output only after validation."""
     with tempfile.TemporaryDirectory(prefix="hockey-recap-") as scratch:
         work = Path(scratch)
-        sequence = []
-        for clip in plan["clips"]:
-            sequence.append(clip)
-            sequence.extend(r for r in plan.get("replays", []) if r["goal_id"] == clip["goal_id"])
+        sequence = recap_sequence(plan)
         pieces = []
         for i, entry in enumerate(sequence):
             dest = work / f"clip-{i:04d}.mp4"
-            if entry.get("slowmo") == "rife":
+            if entry.get("kind") == "stinger":
+                subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                                "-i", f"color=c=black:s=1920x1080:r={FPS}", "-an",
+                                "-frames:v", str(entry["frames"]), "-c:v", "libx264", "-preset", "fast",
+                                "-crf", "20", "-pix_fmt", "yuv420p", "-color_primaries", "bt709",
+                                "-colorspace", "bt709", "-color_trc", "bt709", str(dest)], check=True)
+            elif entry.get("slowmo") == "rife":
                 if rife_ready():
                     plain = work / f"plain-{i:04d}.mp4"
                     keep_fps = math.ceil(entry.get("source_fps") or FPS)
@@ -831,7 +879,8 @@ def main(argv=None):
                 probe_flags.append(f"{cam}: horizon levelled by {-angle:+.1f} degrees")
             horizon[cam] = angle
         plan = plan_recap(selection, layouts, float(options.get("live_play_speed", 1.1)),
-                          rois=rois, source_fps=source_fps, horizon=horizon)
+                          rois=rois, source_fps=source_fps, horizon=horizon,
+                          start=options.get("start", "stinger"))
         plan["flags"] = probe_flags + plan["flags"]
         plan["output"] = name
         verify_sources(plan)

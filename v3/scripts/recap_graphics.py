@@ -130,7 +130,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
     fps = int(plan.get("fps") or 30)
     if fps != 30:
         raise ValueError("graphics require the 30 fps Recap timeline")
-    entries = plan["clips"] + plan.get("replays", [])
+    entries = plan.get("opening", []) + plan["clips"] + plan.get("replays", [])
     if not entries or any(type(e["frames"]) is not int or e["frames"] <= 0 for e in entries):
         raise ValueError("assembly clips need positive integer frame counts")
     frames = sum(e["frames"] for e in entries)
@@ -164,6 +164,8 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         goal_order = [g["id"] for g in goals]
     last_score = [0, 0]
     for e in timeline:
+        if e["kind"] in ("cold_open", "stinger"):
+            continue
         gid = e["goal_id"]
         start, end = round(e["out_start"] * fps), round((e["out_start"] + e["out_dur"]) * fps)
         moment = e.get("moment_s", live[gid]["moment_s"])
@@ -210,12 +212,17 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
                                      "minutes": row.get("minutes") if row.get("minutes") is not None else "?",
                                      "infraction": row.get("infraction") or "PENALTY"}})
         elif cue["cue"] == "sfx_period_wipe":
-            bug_event = next(e for e in events if e["kind"] == "scorebug"
-                             and e["startFrame"] <= start < e["startFrame"] + e["durationFrames"])
-            events.append({"kind": "period", "startFrame": start,
-                           "durationFrames": min(round(2.5 * fps), frames - start),
-                             "data": {"period": bug_event["data"]["period"],
-                                    "score": bug_event["data"]["score"]}})
+            # Bar-aligned cues can precede the new clip by a few frames.
+            bugs = [e for e in events if e["kind"] == "scorebug"]
+            current = next(e for e in bugs if e["startFrame"] <= start < e["startFrame"] + e["durationFrames"])
+            bug_event = next((e for e in bugs if start <= e["startFrame"] <= start + fps and
+                              e["data"]["period"] != current["data"]["period"]), current)
+            data = {"period": bug_event["data"]["period"], "score": bug_event["data"]["score"]}
+            events.append({"kind": "period_wipe", "startFrame": start,
+                           "durationFrames": min(fps, frames - start), "data": dict(data)})
+            if start + fps < frames:
+                events.append({"kind": "period", "startFrame": start + fps,
+                               "durationFrames": min(2 * fps, frames - start - fps), "data": data})
     top_cards = sorted((e for e in events if e["kind"] in ("goal", "penalty")),
                        key=lambda e: e["startFrame"])
     for i, card in enumerate(top_cards):
@@ -237,6 +244,26 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
     props["perspective"] = options.get("perspective") or "neutral"
     props["tokens"] = {"score": "#FFFFFF", "state": "#0D1B2A", "info": "#0A0A0A",
                         "hero": "#FFFFFF", "label": "#5AA4D0"}
+    stinger = next((e for e in timeline if e["kind"] == "stinger"), None)
+    start_mode = plan.get("start", options.get("start", "play"))
+    if start_mode == "cold_open" and (stinger is None or not any(e["kind"] == "cold_open" for e in timeline)):
+        raise ValueError("cold open requires a reserved teaser and stinger; rerun assembly")
+    if stinger is not None or start_mode == "stinger":
+        cue = next((c for c in audio.get("cues", []) if c["cue"] == "game_start"), None)
+        if cue is None:
+            raise ValueError("open stinger requires the game_start audio cue; rerun mix")
+        start_frame = round(cue["t"] * fps)
+        duration = stinger["frames"] if stinger is not None else min(75, frames - start_frame)
+        if stinger is not None and start_frame != round(stinger["out_start"] * fps):
+            raise ValueError("open stinger does not match game_start audio cue; rerun mix")
+        props["events"].append({"kind": "open_stinger", "startFrame": start_frame,
+                                "durationFrames": duration, "data": {"team": props["focusSide"]}})
+    for event in props["events"]:
+        if event["kind"] == "period_wipe":
+            event["data"]["team"] = props["focusSide"]
+    props["events"].sort(key=lambda e: 0 if e["kind"] == "scorebug" else
+                         2 if e["kind"] in ("open_stinger", "period_wipe") else
+                         3 if e["kind"] == "final" else 1)
     for goal in goals:
         if moments.get(goal["id"]) is None:
             props["flags"].append(f"{goal['id']}: goal timing unavailable; scorebug needs review")

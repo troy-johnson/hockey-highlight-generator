@@ -588,7 +588,7 @@ def _run_selection(ctx):
 
 
 def assembly_options(ctx):
-    options = {k: ctx.options[k] for k in ("date", "focus_team", "live_play_speed") if k in ctx.options}
+    options = {k: ctx.options[k] for k in ("date", "focus_team", "live_play_speed", "start") if k in ctx.options}
     team = (ctx.options.get("teams") or {}).get(options.get("focus_team"), {})
     if team.get("name"):
         options["focus_team"] = team["name"]
@@ -698,7 +698,7 @@ def _run_mix(ctx):
 
 def graphics_options(ctx) -> dict:
     return json.loads(json.dumps({k: ctx.options.get(k) for k in
-                                 ("teams", "focus_team", "perspective", "_layers")}))
+                                 ("teams", "focus_team", "perspective", "start", "_layers")}))
 
 
 def _graphics_outputs(ctx):
