@@ -228,7 +228,7 @@ def test_real_render_sequence_with_slow_motion_and_framing(tmp_path):
     layouts = {"cam1": [{"start": 0, "end": 3, "seek": 0, "files": [(str(source), 3)]}]}
     plan = A.plan_recap(selection, layouts, rois={"cam1": {"net": [640, 360, 200, 100]}},
                         source_fps={"cam1": 120.0}, horizon={"cam1": 0.0})
-    assert [e["kind"] if "kind" in e else "live" for e in _sequence(plan)] == \
+    assert ["live" if e.get("kind") == "goal" else e["kind"] for e in _sequence(plan)] == \
         ["live", "wide", "tight"]
     output = tmp_path / "Recap.mp4"
     A.render(plan, output)
@@ -419,7 +419,7 @@ def test_cli_main_probes_and_renders(tmp_path, monkeypatch):
         output.write_bytes(b"new")
     monkeypatch.setattr(A, "render", fake_render)
     assert A.main([str(tmp_path)]) == 0
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert len(report["replays"]) == 2
     assert all(r["slowmo"] == "duplicated" for r in report["replays"])  # 30 fps source, no RIFE
     assert any("RIFE unavailable" in f for f in report["flags"])

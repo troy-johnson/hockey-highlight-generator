@@ -414,3 +414,27 @@ def test_audio_fingerprint_retries_while_model_is_missing(tmp_path, monkeypatch)
     import time
     time.sleep(0.01)
     assert stage.fingerprint(ctx) != a
+
+
+def test_selection_argv_carries_resolved_focus_team_name(tmp_path):
+    ctx = _ctx(tmp_path, options={
+        "focus_team": "icepak",
+        "teams": {"icepak": {"name": "Ice Pak"}},
+        "selection": {"minimum_margin": 0.05},
+    })
+    argv = rr.selection_argv(ctx)
+    payload = json.loads(argv[argv.index("--options") + 1])
+    assert payload["minimum_margin"] == 0.05
+    assert payload["focus_team"] == "Ice Pak"
+
+    fingerprint = rr._fp_selection(ctx)
+    assert fingerprint["options"]["focus_team"] == "Ice Pak"
+    assert fingerprint["options"]["minimum_margin"] == 0.05
+
+
+def test_selection_argv_without_focus_team_stays_absent(tmp_path):
+    ctx = _ctx(tmp_path, options={"selection": {"minimum_margin": 0.05}})
+    argv = rr.selection_argv(ctx)
+    payload = json.loads(argv[argv.index("--options") + 1])
+    assert "focus_team" not in payload
+    assert rr._fp_selection(ctx)["options"] == {"minimum_margin": 0.05}
