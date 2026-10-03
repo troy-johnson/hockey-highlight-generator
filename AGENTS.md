@@ -84,6 +84,8 @@ game_folder/
   recap.log          ← full log of all stage output
   recap_assembly.json ← plain Recap source cuts, frame counts, speed, flags
   YYYY-MM-DD_Team-vs-Opponent_Recap.mp4 ← plain silent Recap (assembly stage)
+  recap_audio.json    ← mix report: cues, bed segments, muted spans, loudness (audio_mix.py)
+  YYYY-MM-DD_Team-vs-Opponent_Recap_audio.mp4 ← Recap with audio mixed in (mix stage)
   recording_check.json ← hockeyrecap check report
   recap_previous/    ← copies of outputs from older tools, before first overwrite
   .recap_cache/signals/ ← flow signals per Recording (.npz); old keys are not pruned

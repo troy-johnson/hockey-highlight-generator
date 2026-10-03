@@ -634,6 +634,68 @@ def _run_assembly(ctx):
     return StageResult("flagged" if flags else "done", flags, summary[0])
 
 
+# Mix -------------------------------------------------------------------------
+
+def mix_options(ctx) -> dict:
+    """Settings the mix script reads. focus_team becomes a team *name*, as in selection.
+    comic_calls stays a hook until the Comic Call review toggle writes it as a per-game option."""
+    focus = ctx.options.get("focus_team")
+    team = (ctx.options.get("teams") or {}).get(focus, {})
+    return {"perspective": ctx.options.get("perspective", "neutral"),
+            "focus_team": team.get("name") or focus,
+            "comic_calls": list(ctx.options.get("comic_calls") or []),
+            "audio": dict(ctx.options.get("audio") or {})}
+
+
+def _mix_manifest_path(ctx) -> Path:
+    from audio_mix import DEFAULT_MANIFEST
+    manifest = mix_options(ctx)["audio"].get("manifest")
+    return Path(manifest).expanduser() if manifest else DEFAULT_MANIFEST
+
+
+def _mix_plan_output(ctx) -> str:
+    try:
+        plan = json.loads((ctx.game_folder / "recap_assembly.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        plan = {}
+    return plan.get("output") or "recap.mp4"
+
+
+def _mix_outputs(ctx) -> list[str]:
+    from audio_mix import mixed_output_name
+    return ["recap_audio.json", mixed_output_name(_mix_plan_output(ctx))]
+
+
+def mix_argv(ctx) -> list[str]:
+    return [ctx.python, str(HERE / "audio_mix.py"), str(ctx.game_folder),
+            "--options", json.dumps(mix_options(ctx))]
+
+
+def _fp_mix(ctx):
+    root = ctx.game_folder
+    video = _mix_plan_output(ctx)
+    inputs: dict = {name: _file_hash(root / name) for name in
+                    ("recap_assembly.json", "music_spans.json", "selection.json", "game_sheet.json")}
+    inputs[video] = file_identity(root / video)     # the plain Recap: identity, not a full hash
+    return {"inputs": inputs,
+            "manifest": file_identity(_mix_manifest_path(ctx)),
+            "options": mix_options(ctx),
+            "scripts": [_file_hash(HERE / n) for n in ("audio_mix.py", "recap_assembly.py")]}
+
+
+def _run_mix(ctx):
+    flags, summary = [], [""]
+    def on_line(line):
+        if line.startswith("[mix] flag: "):
+            flags.append(line.removeprefix("[mix] flag: "))
+        elif line.startswith("[mix] "):
+            summary[0] = line.removeprefix("[mix] ")
+    rc, lines = ctx.run_cmd(mix_argv(ctx), on_line)
+    if rc != 0:
+        return StageResult("failed", [f"mix failed: {_last_error(lines)}"], _last_error(lines))
+    return StageResult("flagged" if flags else "done", flags, summary[0])
+
+
 STAGES: list[Stage] = [
     Stage("discovery", "Find cameras and Recordings", _fp_discovery, lambda c: ["chapters.json"], _run_discovery),
     Stage("sync", "Sync cameras", _fp_sync,
@@ -656,6 +718,8 @@ STAGES: list[Stage] = [
           _run_selection, needs=("coverage", "scoresheet", "audio", "detection")),
     Stage("assembly", "Render plain Recap", _fp_assembly, assembly_outputs,
           _run_assembly, needs=("selection",)),
+    Stage("mix", "Mix Recap audio", _fp_mix, _mix_outputs, _run_mix,
+          needs=("assembly",)),
 ]
 
 STAGE_NAMES = [s.name for s in STAGES]
