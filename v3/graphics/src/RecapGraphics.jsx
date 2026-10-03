@@ -1,5 +1,6 @@
 import React from 'react';
 import {AbsoluteFill, Easing, Img, interpolate, Sequence, staticFile, useCurrentFrame} from 'remotion';
+import {Stinger} from './Stingers';
 
 // Variant D: skewed slabs, semantic colors, and mirrored team tiles.
 const white = '#FFFFFF';
@@ -144,6 +145,8 @@ const Event = ({event, props}) => {
   if (event.kind === 'penalty') return <Penalty {...common}/>;
   if (event.kind === 'period') return <><Particles teams={props.teams}/><Period {...common}/></>;
   if (event.kind === 'final') return <Final {...common}/>;
+  if (event.kind === 'open_stinger') return <Stinger {...common}/>;
+  if (event.kind === 'period_wipe') return <Stinger {...common} wipe/>;
   throw new Error(`Unknown graphics event ${event.kind}`);
 };
 

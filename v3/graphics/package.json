@@ -3,12 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {"render": "node render.mjs"},
+  "scripts": {
+    "render": "node render.mjs"
+  },
   "dependencies": {
+    "@react-three/fiber": "9.8.1",
     "@remotion/bundler": "4.0.529",
     "@remotion/renderer": "4.0.529",
-    "remotion": "4.0.529",
+    "@remotion/three": "4.0.529",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "remotion": "4.0.529",
+    "three": "0.186.1"
   }
 }

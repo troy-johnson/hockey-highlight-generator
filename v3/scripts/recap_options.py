@@ -32,7 +32,7 @@ DEFAULTS: dict = {
     "focus_team": None,
     "perspective": "neutral",
     "live_play_speed": 1.10,
-    "start": "cold_open",           # cold_open | play (start on play)
+    "start": "stinger",             # stinger | cold_open | play
     "rois": {"source": "keep_existing"},   # keep_existing | auto (like hockeydetect)
     "detection": {                  # same values as run_detect.sh
         "fps": 12, "width": 1280, "thresh_pct": 95, "min_sep_s": 12, "merge_gap_s": 0,

@@ -73,7 +73,7 @@ def test_props_score_changes_once_and_replay_keeps_post_goal_score(tmp_path):
     assert penalty["data"] == {"id": "penalty:home:1", "team": "home", "num": "8",
                                "name": "B. Skater", "minutes": "2", "infraction": "TRIP"}
     period = next(e for e in props["events"] if e["kind"] == "period")
-    assert period["startFrame"] == 900 and period["data"] == {"period": 2, "score": [1, 0]}
+    assert period["startFrame"] == 930 and period["data"] == {"period": 2, "score": [1, 0]}
     assert props["durationFrames"] == 1200
 
 
@@ -185,7 +185,7 @@ def test_period_wipe_rounded_cue_uses_new_clip_frame(tmp_path):
     audio["cues"] = [{"cue": "sfx_period_wipe", "t": 1.033}]
     props = rg.write_props(tmp_path, sheet, selection, plan, audio, {})
     card = next(e for e in props["events"] if e["kind"] == "period")
-    assert card["startFrame"] == 31 and card["data"]["period"] == 2
+    assert card["startFrame"] == 61 and card["data"]["period"] == 2
 
 
 @pytest.mark.parametrize("minutes,pim", [("2+10", 12), ("2:30", 2.5), ("GM", None), ("?", None), (0, 0), ("0", 0)])

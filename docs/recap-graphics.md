@@ -15,6 +15,8 @@ npm ci --prefix v3/graphics
 
 Remotion downloads Chrome Headless Shell on its first render. Later renders use the local browser and bundled Inter fonts.
 The Inter font license is in `v3/graphics/public/Inter-OFL.txt`.
+The stingers use pinned `@remotion/three` 4.0.529, React Three Fiber 9.8.1, and three.js 0.186.1.
+The renderer selects Chromium's ANGLE backend for WebGL.
 
 Run the pipeline with `hockeyrecap run GAME_FOLDER`, or rerun graphics with:
 
@@ -119,6 +121,8 @@ Events appear in layer order: scorebug first, event cards next, FINAL last.
 | `penalty` | `id`, `team`, `num`, `name`, `minutes`, `infraction` |
 | `period` | `score`, `period` |
 | `final` | `score`, `table.home`, `table.away` |
+| `open_stinger` | `team` (`home`, `away`, or `null`) |
+| `period_wipe` | `team`, `score`, `period` |
 
 Each FINAL table contains `skaters` and `goalies` arrays.
 A skater row has `num`, `name`, `g`, `a`, `pts`, and `pim`.
@@ -127,6 +131,47 @@ Numeric minutes, combined penalties such as `2+10`, and durations such as `2:30`
 A goalie row has `num`, `name`, and `saves`.
 Skaters with points or PIM appear in descending PTS, goals, and PIM order.
 FINAL includes both teams and every eligible row.
+
+## 3D stingers
+
+The default `--start stinger` reserves 75 frames before chronological play.
+The slab slides onto a 200-by-85-foot rink, turns through a hockey stop, and releases soft snow.
+The face uses the Focus Team's name, colors, and configured logo. Ice Pak displays the `ICEPAK / HOCKEY` lockup.
+A missing logo uses the wordmark. An unmatched Focus Team uses a neutral hockey face.
+The face, stripes, and frost share the slab outline and parent transform.
+Screen-space snow and mist cannot intersect the rink or slab geometry.
+
+`--start cold_open` adds up to six seconds from the highest-interest surviving play before the stinger.
+The main Recap retains chronological order and includes that play again.
+The teaser has source audio and PA muting, but no scorebug, goal horn, or goal card.
+`--start play` starts chronological play immediately and omits the opening stinger.
+All modes retain the four-minute assembly cap.
+
+Assembly schema 3 adds `start` and `opening`.
+`opening` contains ordered `cold_open` and `stinger` entries with the same frame and source fields as clips.
+A stinger has no source parts. The assembly renders black frames; graphics replaces them with the 3D scene.
+The mix places `game_start` and its neutral sting at the stinger's output start.
+Graphics rejects a reserved opening that does not match the audio cue.
+For an older assembly, explicit `start: stinger` overlays its first 75 frames without changing audio or duration.
+An older assembly needs `rerun --from assembly` for a cold open or a reserved opening.
+
+Each `sfx_period_wipe` cue starts a 30-frame lens-snow wipe with the Focus Team crest or wordmark.
+The two-second period card follows the wipe. Both events use the upcoming period's score.
+Short end-of-video events stop at the last frame.
+Layer order is scorebug, cards, stingers, then FINAL.
+The renderer produces alpha at twice the output resolution. ffmpeg downsamples with Lanczos and copies the mixed audio.
+
+The existing render CLI also accepts `OpenStinger` and `PeriodWipe` as its fourth argument:
+
+```sh
+node v3/graphics/render.mjs open-props.json OUTPUT_DIRECTORY 0:74 OpenStinger
+node v3/graphics/render.mjs wipe-props.json OUTPUT_DIRECTORY 0:29 PeriodWipe
+node v3/graphics/render.mjs recap-props.json OUTPUT_DIRECTORY --validate
+```
+
+Standalone props use the same schema, teams, tokens, and `focusSide`, with an empty `events` array.
+Set `durationFrames` to 75 for an opening or 30 for a wipe.
+`--validate` checks frame bounds without creating output files or launching Chromium.
 
 ## Data and timing rules
 
@@ -150,9 +195,9 @@ The scorebug does not remove goals that it has already counted.
 For other plays, unmatched goals use the Selection window's expected camera time.
 The Selection field is `window.expected`. Missing timing produces a scorebug review flag; FINAL still counts that goal.
 
-GOAL, penalty, and period cards start at their existing audio cues.
+GOAL and penalty cards start at their existing audio cues.
 GOAL and penalty cards last up to four seconds. They stop at the source clip boundary or the next top card.
-Period cards last up to 2.5 seconds.
+Period cards follow the one-second wipe and last up to two seconds.
 FINAL starts five seconds before the Recap end, or earlier if its audio cue starts earlier.
 The existing FINAL audio cue plays during the card. Every card stops at the Recap end.
 The stage flags a late card that overlaps FINAL. Review that closing timeline before publishing the Recap.
