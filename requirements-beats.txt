@@ -1,0 +1,2 @@
+# Optional Cue Library beat-grid inference. Validation and manual BPM need no ML dependencies.
+beat-this==1.1.0

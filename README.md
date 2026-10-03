@@ -58,6 +58,11 @@ It will:
 
 ---
 
+## Cue Library
+
+For Recap audio, see the [Cue Library guide](docs/cue-library.md).
+It covers approved sources, schema-1 manifests, beat grids, and Bed rotation.
+
 ## V2 file mode
 
 Pass two MP4 files directly (single-chapter games or pre-exported clips):
