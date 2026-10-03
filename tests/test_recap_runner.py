@@ -207,7 +207,7 @@ def test_batch_one_failed_game_does_not_stop_the_others(tmp_path):
 
 
 def test_real_stage_list_order():
-    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "audio", "coverage", "scoresheet", "selection", "assembly"]
+    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "audio", "coverage", "scoresheet", "selection", "assembly", "mix"]
 
 
 def test_audio_stage_wiring(tmp_path):
