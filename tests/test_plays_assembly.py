@@ -74,18 +74,18 @@ def total_frames(plan):
 
 
 class TestCutGoals:
-    def test_cut_goals_are_omitted_and_flags_explain_it(self):
+    def test_cut_goal_is_restored_by_the_fill(self):
         goals = [goal(f"home:{i}", i) for i in range(1, 13)]
         goals[3]["cut"] = True
         result = A.plan_recap(selection(goals), layouts())
         goal_ids = [c["goal_id"] for c in result["clips"] if c["kind"] == "goal"]
-        assert "home:4" not in goal_ids
-        assert len(goal_ids) == 11
-        # 11 surviving goals still sit in tier 2: one tight replay each, 5 s output.
-        tight = [r for r in result["replays"] if r["kind"] == "tight"]
-        assert len(tight) == 11
-        assert any("home:4: cut by interest policy; omitted from Recap" in f
+        # The fill restores the cut goal: 11 goals leave the Recap short of the
+        # three-minute target.
+        assert "home:4" in goal_ids
+        assert len(goal_ids) == 12
+        assert any("home:4: restored from the cut list to fill the Recap" in f
                    for f in result["flags"])
+        assert not any("home:4: cut by interest policy" in f for f in result["flags"])
 
     def test_lower_tier_when_cuts_take_the_count_across_a_boundary(self):
         goals = [goal(f"home:{i}", i) for i in range(1, 13)]
@@ -93,8 +93,59 @@ class TestCutGoals:
             g["cut"] = True
         result = A.plan_recap(selection(goals), layouts())
         kinds = [r["kind"] for r in result["replays"]]
-        # 5 surviving goals -> tier 1: one wide and one tight shot each.
-        assert kinds.count("wide") == 5 and kinds.count("tight") == 5
+        # 5 surviving goals -> tier 1; the fill restores five cut goals, so ten
+        # goals each carry one wide and one tight shot.
+        assert kinds.count("wide") == 10 and kinds.count("tight") == 10
+
+    def test_fill_restores_cut_goals_before_plays(self):
+        goals = [goal(f"home:{i}", i) for i in range(1, 13)]
+        for g, interest in ((goals[3], 0.45), (goals[5], 0.4), (goals[7], 0.35)):
+            g["cut"] = True
+            g["interest"] = interest
+        plays = [play("p-1", 500.0, score=0.5), play("p-2", 900.0, score=0.5)]
+        result = A.plan_recap(selection(goals, plays, [{"id": "p-1"}, {"id": "p-2"}]),
+                              layouts())
+        goal_ids = [c["goal_id"] for c in result["clips"] if c["kind"] == "goal"]
+        assert all(f"home:{i}" in goal_ids for i in (4, 6, 8))
+        # Cut goals come back in descending interest order, ahead of any play.
+        restored = [f.split(":")[0] + ":" + f.split(":")[1]
+                    for f in result["flags"] if "restored from the cut list" in f]
+        assert restored == ["home:4", "home:6", "home:8"]
+        assert len([c for c in result["clips"] if c["kind"] == "play"]) == 2
+
+    def test_a_much_better_play_preempts_a_cut_goal(self):
+        goals = [goal(f"home:{i}", i) for i in range(1, 13)]
+        for g in goals[2:9]:
+            g["cut"] = True
+            g["interest"] = 0.45
+        plays = [play("p-1", 500.0, score=0.9)]
+        result = A.plan_recap(selection(goals, plays, [{"id": "p-1"}]), layouts())
+        # A goal-only fill would reach the target without any play; the 0.9
+        # play buys its way in ahead of the cut goals.
+        assert [c["goal_id"] for c in result["clips"] if c["kind"] == "play"] == ["p-1"]
+        assert any("home:3: restored from the cut list to fill the Recap" in f
+                   for f in result["flags"])
+
+    def test_a_close_play_never_preempts_a_cut_goal(self):
+        goals = [goal(f"home:{i}", i) for i in range(1, 13)]
+        for g in goals[2:9]:
+            g["cut"] = True
+            g["interest"] = 0.45
+        plays = [play("p-1", 500.0, score=0.6)]
+        result = A.plan_recap(selection(goals, plays, [{"id": "p-1"}]), layouts())
+        # The restored goals reach the fill target on their own.
+        assert not [c for c in result["clips"] if c["kind"] == "play"]
+        restored = [f for f in result["flags"] if "restored from the cut list" in f]
+        assert len(restored) == 5
+
+    def test_cut_goals_stay_omitted_when_there_is_no_fill_room(self):
+        goals = [goal(f"home:{i}", i) for i in range(1, 25)]
+        goals[3]["cut"] = True
+        goals[5]["cut"] = True
+        result = A.plan_recap(selection(goals), layouts())
+        goal_ids = [c["goal_id"] for c in result["clips"] if c["kind"] == "goal"]
+        assert "home:4" not in goal_ids and "home:6" not in goal_ids
+        assert sum("cut by interest policy" in f for f in result["flags"]) == 2
 
 
 class TestChosenPlays:

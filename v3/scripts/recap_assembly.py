@@ -39,8 +39,13 @@ REPLAY_SHOTS = {1: (("wide", 2.0), ("tight", 2.0)),
                 2: (("tight", 2.5),),
                 3: (("tight", 2.0),)}
 # Spec 002 §5.8: the Recap is about three minutes. After the goals, chosen plays
-# and their replay blocks, filler plays from the Next Best list top it up.
+# and their replay blocks, the fill restores cut goals first and then adds filler
+# plays from the Next Best list.
 FILL_TARGET_S = 180.0
+# User policy (2026-10-02): a Next Best play preempts the next cut goal in the
+# fill only when its score beats the goal's interest by this margin; goals fill
+# first otherwise.
+FILL_PLAY_ADVANTAGE = 0.25
 # Only the best non-goal play gets a short replay (spec 002 §5.6); one tight shot.
 BEST_PLAY_REPLAY_S = 2.0
 
@@ -252,21 +257,18 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         raise ValueError("live_play_speed must be between 0.25 and 4")
     goals = selection.get("goals") or []
     chosen = [g for g in goals if g.get("chosen") and not g.get("cut")]
-    # The tier follows the goals that will actually be in the Recap, which no
-    # longer includes goals selection cut by the interest policy.
+    # The tier follows the goals chosen before the fill: goals the fill later
+    # restores from the cut list keep the same tier-based budgets.
     before, after = (6., 3.) if len(chosen) <= 6 else (5., 2.) if len(chosen) <= 12 else (4., 0.)
     tier = 1 if len(chosen) <= 6 else 2 if len(chosen) <= 12 else 3
     clips, flags, replays = [], [], []
-    for goal in goals:
+
+    def goal_clip(goal):
+        """One live goal clip from its chosen window, or None with a flag."""
         choice = goal.get("chosen")
-        if choice and goal.get("cut"):
-            # Spec 002 §5.8 goal cutting: selection never cuts a protected goal,
-            # so any `cut` arriving here is by definition a cuttable goal.
-            flags.append(f"{goal['id']}: cut by interest policy; omitted from Recap")
-            continue
         if not choice:
             flags.append(f"{goal['id']}: no clip found; omitted from plain Recap")
-            continue
+            return None
         cam = choice["primary_cam"]
         moment = _num(choice["detection_s"], "detection_s", goal["id"])
         window = (_num(choice["start_s"], "start_s", goal["id"]),
@@ -276,7 +278,7 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         block = _containing_block(layouts.get(cam, []), moment)
         if block is None:
             flags.append(f"{goal['id']}: moment outside Recording coverage; omitted from plain Recap")
-            continue
+            return None
         start, end = moment - before, moment + GOAL_ACTION_S + after
         trimmed = []
         if start < block["start"]:
@@ -288,12 +290,25 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
             flags.append(f"{goal['id']}: clip {' and '.join(trimmed)} trimmed to Recording coverage")
         if not start <= moment < end:
             flags.append(f"{goal['id']}: no room for goal action in Recording coverage; omitted")
+            return None
+        return {"goal_id": goal["id"], "kind": "goal", "camera": cam, "moment_s": moment,
+                "start_s": start, "end_s": end, "speed": speed,
+                "zoom": {"type": "push", "z0": ZOOM_MIN, "z1": ZOOM_MAX},
+                "angle_deg": float((horizon or {}).get(cam) or 0.0),
+                "best_goal": bool(goal.get("best_goal"))}
+
+    # Goals cut by the interest policy are a reserve, not a deletion: when the
+    # Recap falls short of about three minutes they come back before any play.
+    cut_goals = []
+    for goal in goals:
+        if goal.get("chosen") and goal.get("cut"):
+            # Spec 002 §5.8 goal cutting: selection never cuts a protected goal,
+            # so any `cut` arriving here is by definition a cuttable goal.
+            cut_goals.append(goal)
             continue
-        clips.append({"goal_id": goal["id"], "kind": "goal", "camera": cam, "moment_s": moment,
-                      "start_s": start, "end_s": end, "speed": speed,
-                      "zoom": {"type": "push", "z0": ZOOM_MIN, "z1": ZOOM_MAX},
-                      "angle_deg": float((horizon or {}).get(cam) or 0.0),
-                      "best_goal": bool(goal.get("best_goal"))})
+        clip = goal_clip(goal)
+        if clip:
+            clips.append(clip)
     clips.sort(key=lambda c: c["moment_s"])
     if not clips:
         raise ValueError("no selected goals to render")
@@ -402,22 +417,50 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
     total_frames = goal_frames + sum(r["frames"] for r in replays) + sum(
         math.ceil((c["end_s"] - c["start_s"]) / speed * FPS) for c in play_clips)
     fill_target_frames = FILL_TARGET_S * FPS
-    if total_frames < fill_target_frames:
-        for nb in selection.get("next_best") or []:
-            if total_frames >= fill_target_frames:
-                break
-            play = plays_by_id.get(nb.get("id")) if isinstance(nb, dict) else None
-            if not play or play.get("chosen"):
-                continue
-            clip = build_play_clip(play, False)
+    restored_ids: list[str] = []
+    cut_pool = sorted(cut_goals, key=lambda g: -(g.get("interest") or 0.0))
+    play_pool = list(selection.get("next_best") or [])
+    play_i = 0
+    # Fill policy: restore cut goals first; a Next Best play preempts the next
+    # cut goal only when its score beats the goal's interest by a wide margin.
+    while total_frames < fill_target_frames and (cut_pool or play_i < len(play_pool)):
+        take_goal = bool(cut_pool)
+        if take_goal and play_i < len(play_pool):
+            peek = plays_by_id.get(play_pool[play_i].get("id")) if isinstance(play_pool[play_i], dict) else None
+            if peek and not peek.get("chosen") and \
+                    (float(peek.get("score") or 0.0) - (cut_pool[0].get("interest") or 0.0)) >= FILL_PLAY_ADVANTAGE:
+                take_goal = False
+        if take_goal:
+            goal = cut_pool.pop(0)
+            clip = goal_clip(goal)
             if clip is None:
                 continue
-            filler_frames = math.ceil((clip["end_s"] - clip["start_s"]) / speed * FPS)
-            if total_frames + filler_frames > MAX_FRAMES:
+            shots = [s for s in (replay_shot(clip, kind, src_d, len(clips))
+                                 for kind, src_d in (REPLAY_SHOTS[1] if clip.get("best_goal")
+                                                     else REPLAY_SHOTS[tier])) if s]
+            needed = math.ceil((clip["end_s"] - clip["start_s"]) / speed * FPS) + sum(s["frames"] for s in shots)
+            if total_frames + needed > MAX_FRAMES:
                 continue
-            play_clips.append(clip)
-            filler_ids.append(clip["goal_id"])
-            total_frames += filler_frames
+            clips.append(clip)
+            replays.extend(shots)
+            total_frames += needed
+            restored_ids.append(goal["id"])
+            flags.append(f"{goal['id']}: restored from the cut list to fill the Recap")
+            continue
+        nb = play_pool[play_i]
+        play_i += 1
+        play = plays_by_id.get(nb.get("id")) if isinstance(nb, dict) else None
+        if not play or play.get("chosen"):
+            continue
+        clip = build_play_clip(play, False)
+        if clip is None:
+            continue
+        filler_frames = math.ceil((clip["end_s"] - clip["start_s"]) / speed * FPS)
+        if total_frames + filler_frames > MAX_FRAMES:
+            continue
+        play_clips.append(clip)
+        filler_ids.append(clip["goal_id"])
+        total_frames += filler_frames
 
     # Only the best play gets a short replay: one tight shot, slow motion (spec 002 §5.6).
     best_play_id = None
@@ -431,6 +474,11 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
     if play_clips or filler_ids:
         flags.append(f"including {len(play_clips)} non-goal play(s); {len(filler_ids)} filler play(s)"
                      + (f"; best-play replay on {best_play_id}" if best_play_id else ""))
+
+    # Cut goals that the fill never restored are dropped after all.
+    for goal in cut_goals:
+        if goal["id"] not in restored_ids:
+            flags.append(f"{goal['id']}: cut by interest policy; omitted from Recap")
 
     clips = sorted(clips + play_clips, key=lambda c: c["moment_s"])
     kept = []
