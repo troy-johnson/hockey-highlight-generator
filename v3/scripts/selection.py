@@ -25,7 +25,10 @@ SETTINGS = {"minimum_score": 0.55, "minimum_margin": 0.08, "clock_sigma_s": 90.0
             "clock_slop_s": 15.0, "uncertain_slop_s": 120.0, "order_slop_s": 3.0,
              "moment_before_whistle_s": [0.25, 3.0], "pre_roll_s": 6.0, "post_roll_s": 4.0,
              "whistle_seed_offset_s": 1.2, "same_moment_s": 1.0,
-            "quiet_low_activity": 0.35, "quiet_high_activity": 0.6}
+            "quiet_low_activity": 0.35, "quiet_high_activity": 0.6,
+            "cut_interest": 0.5, "cut_minimum_goals": 10, "play_gap_s": 12.0,
+            "penalty_before_s": 7.0, "penalty_after_s": 1.0, "penalty_whistle_after_s": 3.0,
+            "next_best_size": 10}
 TIMELINE = "detection (cam1 concat time; cam2 moved by the sync offset)"
 
 
@@ -111,13 +114,7 @@ def segment_mean(a: np.ndarray, rate: float, lo: float, hi: float) -> float | No
 
 def prepare_goals(sheet: dict, rules: dict) -> list[dict]:
     from scoresheet import parse_time
-    length = rules.get("period_minutes")
-    try:
-        length = float(length) * 60 if length is not None else None
-        if length is not None and (not math.isfinite(length) or length <= 0):
-            length = None
-    except (TypeError, ValueError):
-        length = None
+    length = rules_period_seconds(rules)
     direction = rules.get("time_direction")
     out = []
     for side in ("home", "away", "unknown"):
@@ -383,6 +380,270 @@ def match_goals(goals: list[dict], candidates: list[dict], periods: list[dict], 
     return {"score": score, "results": results}
 
 
+# Spec 002 §5.6: one interest score drives cutting, the fill, the best-goal
+# treatment, the cold open, and the Short. Context comes first: §5.8 never cuts
+# the first goal, a tying or lead-change goal, the game-winner, overtime and
+# shootout goals, or the 2-3 best goals.
+CONTEXT_BASE = {"game-winner": 1.0, "shootout": 1.0, "overtime": 1.0, "tying goal": 0.9,
+                "lead change": 0.8, "first goal": 0.7, "last two minutes": 0.6, "focus team": 0.6}
+NEVER_CUT = frozenset({"first goal", "tying goal", "lead change", "game-winner", "overtime", "shootout"})
+
+
+def game_context(goals: list[dict], rules: dict, focus_team: str | None = None) -> list[dict]:
+    """Interest per goal, in the game order the list arrived in.
+
+    Returns one {interest, protected, reasons} per goal. reasons are the game
+    context reasons; protected goals are never cut (§5.8).
+    """
+    final = {"home": sum(1 for g in goals if g.get("side") == "home"),
+             "away": sum(1 for g in goals if g.get("side") == "away")}
+    winner = "home" if final["home"] > final["away"] else "away" if final["away"] > final["home"] else None
+    losing_total = min(final.values())
+    winner_goals = 0
+    try:
+        regulation = int(rules.get("periods") or 3)
+    except (TypeError, ValueError):
+        regulation = 3
+    focus = (focus_team or "").casefold()
+    out = []
+    home = away = 0
+    leader: str | None = None
+    for g in goals:
+        side = g.get("side")
+        sheet_row = g.get("sheet")
+        if not isinstance(sheet_row, dict):
+            sheet_row = {}
+        per_raw = str(sheet_row.get("per") or "").upper()
+        gtype = str(sheet_row.get("type") or "").upper()
+        reasons: list[str] = []
+        before = home - away
+        before_leader = leader
+        if side == "home":
+            home += 1
+        elif side == "away":
+            away += 1
+        after = home - away
+        new_leader = "home" if after > 0 else "away" if after < 0 else None
+        if new_leader:
+            leader = new_leader
+        if home + away == 1:
+            reasons.append("first goal")
+        if winner == side:
+            winner_goals += 1
+            if winner_goals == losing_total + 1:
+                reasons.append("game-winner")
+        if after == 0 and before != 0:
+            reasons.append("tying goal")
+        # A go-ahead goal after a tie also changes the lead: either side taking
+        # the lead from a tied score (H, A, H or H, A, A both protect). The two
+        # conditions below can hold at once; the reason is only recorded once.
+        if (before == 0 and after != 0 and before_leader) or (
+            new_leader and before_leader and new_leader != before_leader
+        ):
+            if "lead change" not in reasons:
+                reasons.append("lead change")
+        if per_raw == "OT" or gtype == "OT" or (g.get("period") is not None and g["period"] > regulation):
+            reasons.append("overtime")
+        if per_raw == "SO" or gtype == "SO":
+            reasons.append("shootout")
+        if (g.get("period") == regulation and g.get("elapsed_s") is not None
+                and g.get("period_s") is not None and g["period_s"] - g["elapsed_s"] <= 120):
+            reasons.append("last two minutes")
+        if focus and focus == str(g.get("team") or "").casefold():
+            reasons.append("focus team")
+        base = max((CONTEXT_BASE.get(r, 0.3) for r in reasons), default=0.3)
+        interest = min(1.0, max(0.0, 0.6 * base + 0.4 * (g.get("score") or 0.0)))
+        out.append({"interest": round(interest, 4), "protected": False, "reasons": reasons})
+    # The "best" slots protect goals that will actually render; a sheet goal
+    # without a clip (chosen None in the selection output) would take the slot
+    # without earning treatment. Goals without a "chosen" key at all (plain
+    # goal rows passed straight to this helper) still count.
+    renderable = [i for i, g in enumerate(goals) if "chosen" not in g or g["chosen"] is not None]
+    top = sorted(renderable, key=lambda i: -out[i]["interest"])[:3]
+    for i, c in enumerate(out):
+        c["protected"] = bool(set(c["reasons"]) & NEVER_CUT) or i in top
+        # Spec 002 §5.8: the 2-3 best goals always get the full treatment.
+        c["best_goal"] = i in top
+    return out
+
+
+def plan_cuts(goals: list[dict], contexts: list[dict], settings: dict | None = None) -> list[str]:
+    """Mark cut goals in their contexts; returns the cut goal ids.
+
+    §5.8: a goal may be cut only when its score is low and the game has ten or
+    more goals, and never when the goal is protected.
+    """
+    settings = settings or SETTINGS
+    floor = float(settings.get("cut_interest", 0.5))
+    minimum = int(settings.get("cut_minimum_goals", 10))
+    cut = []
+    for g, c in zip(goals, contexts):
+        c["cut"] = len(goals) >= minimum and not c["protected"] and c["interest"] < floor
+        if c["cut"]:
+            cut.append(g["id"])
+    return cut
+
+
+def _play_camera(candidate: dict) -> tuple[str, float] | None:
+    """Best net-play camera of a candidate by score without the clock feature."""
+    best = None
+    for cam, evidence in candidate["cameras"].items():
+        if not evidence.get("net_motion"):
+            continue
+        features = {k: v for k, v in evidence["features"].items() if k != "clock"}
+        score = weighted_score(features)
+        if best is None or score > best[1]:
+            best = (cam, score)
+    return best
+
+
+def select_plays(candidates: list[dict], results: dict, output_goals: list[dict],
+                 periods: list[dict], coverage: dict, rules: dict, settings: dict,
+                 sheet: dict, flags: list[str]) -> tuple[list[dict], list[dict]]:
+    """Non-goal plays (chances, saves, stops) and penalty clips, plus Next Best.
+
+    §5.6: only plays at the net are automatic; hits and fights wait for a model
+    trained on review labels, so they never become plays here. Penalties come
+    from Game Sheet rows whose clock matches confidently with a whistle just
+    after. Penalty matching runs first and claims its candidates so a moment is
+    never rendered as both a penalty and a plain play. Returns (plays sorted by
+    detection time, next_best ranked by score).
+    """
+    used = {m["candidate"]["id"] for m in results.values()}
+    claimed: set[str] = set()
+    goal_windows = [(g["chosen"]["start_s"], g["chosen"]["end_s"]) for g in output_goals
+                    if g.get("chosen")]
+    gap = float(settings.get("play_gap_s", 12.0))
+    whistle_after_s = float(settings.get("penalty_whistle_after_s", 3.0))
+
+    def too_close(t: float) -> bool:
+        return any(a - gap <= t <= b + gap for a, b in goal_windows)
+
+    period_seconds = rules_period_seconds(rules)
+    plays: list[dict] = []
+    from scoresheet import parse_time
+
+    # --- penalties: Game Sheet row with a confident clock match, whistle just after ---
+    minimum_score = float(settings.get("minimum_score", 0.55))
+    for side in ("home", "away"):
+        rows = (sheet.get("penalties") or {}).get(side) or []
+        if not isinstance(rows, list):
+            rows = [rows]
+        for i, claim in enumerate(rows):
+            row = claim if isinstance(claim, dict) else {}
+            per_raw = str(row.get("per") or "").upper()
+            if per_raw == "OT":
+                # Spec timing tables treat overtime as the period after regulation.
+                try:
+                    n = int(rules.get("periods") or 3) + 1
+                except (TypeError, ValueError):
+                    n = None
+            else:
+                n = int(per_raw) if per_raw.isdecimal() else None
+            period = next((p for p in periods if p["n"] == n), None)
+            if period is None:
+                if row.get("off"):
+                    flags.append(f"penalty {side}:{i + 1}: unreadable period; skipped")
+                continue
+            if row.get("status") not in (None, "", "ok"):
+                flags.append(f"penalty {side}:{i + 1}: row needs review; skipped")
+                continue
+            clock = row.get("time_s")
+            if clock is None:
+                clock = parse_time(str(row.get("off") or ""))
+            elapsed = elapsed_time(clock, period_seconds, rules.get("time_direction"))
+            window = clock_window(period, elapsed, period_seconds, rules.get("clock"))
+            expected, sigma = window["expected"], window["sigma"]
+            if expected is None or sigma is None:
+                # No confident clock match: sheet 5.6 does not allow guessing.
+                flags.append(f"penalty {side}:{i + 1}: no confident time match")
+                continue
+            confident, inside_goal = [], []
+            for c in candidates:
+                if c["id"] in used or c["id"] in claimed:
+                    continue
+                for _cam, evidence in c["cameras"].items():
+                    t = evidence["t"]
+                    whistle_t = evidence.get("whistle_t")
+                    if whistle_t is None or not 0 <= whistle_t - t <= whistle_after_s:
+                        continue
+                    if abs(t - expected) <= sigma:
+                        (inside_goal if too_close(t) else confident).append(
+                            (weighted_score(evidence["features"]), c, _cam, t, whistle_t))
+            confident = [m for m in confident if m[0] >= minimum_score]
+            if not confident:
+                if inside_goal:
+                    flags.append(f"penalty {side}:{i + 1}: its clip would overlap a selected "
+                                 f"goal clip; skipped")
+                else:
+                    flags.append(f"penalty {side}:{i + 1}: no confident time match")
+                continue
+            score, c, cam, t, whistle_t = max(confident, key=lambda m: m[0])
+            spot = next(((a, b) for a, b in coverage.get(cam, {}).get("spans", [])
+                         if a <= t < b), None)
+            if spot is None:
+                flags.append(f"penalty {side}:{i + 1}: no coverage at match time; skipped")
+                continue
+            claimed.add(c["id"])
+            a, b = spot
+            infraction = str(row.get("infraction") or "penalty").strip().upper()
+            minutes = str(row.get("minutes") or "").strip()
+            label = f"{infraction} ({minutes} min) penalty" if minutes else f"{infraction} penalty"
+            plays.append({"id": f"penalty:{side}:{i + 1}", "kind": "penalty", "label": label,
+                          "detection_s": round(t, 3), "primary_cam": cam,
+                          "score": round(score, 4), "candidate_id": c["id"],
+                          "start_s": round(max(a, whistle_t - settings["penalty_before_s"]), 3),
+                          "end_s": round(min(b, whistle_t + settings["penalty_after_s"]), 3),
+                          "whistle_t": whistle_t, "chosen": True, "flags": []})
+
+    # --- automatic net plays from the remaining candidates ---
+    taken: list[tuple[float, float]] = []
+    for c in candidates:
+        if c["id"] in used or c["id"] in claimed or too_close(c["t"]):
+            continue
+        pick = _play_camera(c)
+        if pick is None:
+            continue
+        cam, score = pick
+        t = c["cameras"][cam]["t"]
+        spot = next(((a, b) for a, b in coverage.get(cam, {}).get("spans", [])
+                     if a <= t < b), None)
+        if spot is None:
+            continue
+        a, b = spot
+        window = (max(a, t - settings["pre_roll_s"]), min(b, t + settings["post_roll_s"]))
+        # Two net plays closer than the goal gap share footage; keep the first
+        # in game order so the Recap never shows the same play twice.
+        if any(w2[0] - gap <= window[1] and w2[1] + gap >= window[0] for w2 in taken):
+            continue
+        taken.append(window)
+        plays.append({"id": f"play:{c['id']}", "kind": "net_play", "label": "Net play",
+                      "detection_s": round(t, 3), "primary_cam": cam, "score": round(score, 4),
+                      "candidate_id": c["id"],
+                      "start_s": round(window[0], 3),
+                      "end_s": round(window[1], 3),
+                      "whistle_t": c["cameras"][cam].get("whistle_t"),
+                      "chosen": False, "flags": []})
+    plays.sort(key=lambda p: p["detection_s"])
+    rankings = sorted((p for p in plays if p["kind"] == "net_play"), key=lambda p: (-p["score"], p["detection_s"]))
+    next_best = [{"id": p["id"], "kind": p["kind"], "detection_s": p["detection_s"],
+                  "camera": p["primary_cam"], "score": p["score"],
+                  "why": "net play at the goal mouth"} for p in rankings[:int(settings.get("next_best_size", 10))]]
+    return plays, next_best
+
+
+def rules_period_seconds(rules: dict) -> float | None:
+    """Period length in seconds parsed from League rules, or None (see prepare_goals)."""
+    length = rules.get("period_minutes")
+    try:
+        seconds = float(length) * 60 if length is not None else None
+        if seconds is not None and (not math.isfinite(seconds) or seconds <= 0):
+            return None
+        return seconds
+    except (TypeError, ValueError):
+        return None
+
+
 def select_goals(sheet: dict, structure: dict, audio: dict, events: list[dict], flows: dict,
                  activities: dict, layouts: dict, rules: dict, options: dict | None = None,
                  fps: int = 12, input_flags: list[str] | None = None) -> dict:
@@ -494,10 +755,25 @@ def select_goals(sheet: dict, structure: dict, audio: dict, events: list[dict], 
             item["flags"].append("no clip found")
         flags.extend(f"{g['id']}: {flag}" for flag in item["flags"])
         output_goals.append(item)
-    return {"schema_version": 1, "timeline": TIMELINE, "rules": rules, "settings": settings,
+    contexts = game_context(output_goals, rules, (options or {}).get("focus_team"))
+    cut_ids = plan_cuts(output_goals, contexts, settings)
+    for item, context in zip(output_goals, contexts):
+        item["interest"] = context["interest"]
+        item["protected"] = context["protected"]
+        item["reasons"] = context["reasons"]
+        if context.get("cut"):
+            item["cut"] = True
+        if context.get("best_goal"):
+            item["best_goal"] = True
+    if cut_ids:
+        flags.append("cut " + f"{len(cut_ids)} goal(s) by interest policy: " + ", ".join(cut_ids))
+    plays, next_best = select_plays(candidates, results, output_goals, periods, coverage,
+                                    rules, settings, sheet, flags)
+    return {"schema_version": 2, "timeline": TIMELINE, "rules": rules, "settings": settings,
             "weights": WEIGHTS, "mapping": {"defender_teams": mapping, "source": "explicit" if explicit is not None else "inferred",
                                             "margin": mapping_margin},
-            "periods": periods, "goals": output_goals, "candidate_count": len(candidates),
+            "periods": periods, "goals": output_goals, "plays": plays, "next_best": next_best,
+            "candidate_count": len(candidates),
             "input_flags": upstream_flags, "flags": list(dict.fromkeys(flags))}
 
 

@@ -542,10 +542,23 @@ def _fp_selection(ctx):
             "flow": {"fps": s.get("fps", 12), "width": s.get("width", 1280),
                      "audio": float(s.get("audio_weight", 0) or 0) > 0,
                      "hwaccel": os.environ.get("HHG_HWACCEL", "1") != "0"},
-            "league": selection_rules(ctx), "options": ctx.options.get("selection") or {},
+            "league": selection_rules(ctx), "options": selection_options(ctx),
             "scripts": [_file_hash(HERE / n) for n in
                         ("selection.py", "selection_inputs.py", "audio_signals.py", "coverage.py", "scoresheet.py")]
                        + [_file_hash(V2 / "signals.py")]}
+
+
+def selection_options(ctx) -> dict:
+    options = dict(ctx.options.get("selection") or {})
+    focus = ctx.options.get("focus_team")
+    team = (ctx.options.get("teams") or {}).get(focus, {})
+    # select_goals reads options.focus_team as a team *name* (it compares against
+    # the sheet team names), while ctx.options.focus_team is a Team Config id.
+    if team.get("name"):
+        options["focus_team"] = team["name"]
+    elif focus:
+        options["focus_team"] = focus
+    return options
 
 
 def selection_argv(ctx) -> list[str]:
@@ -553,7 +566,7 @@ def selection_argv(ctx) -> list[str]:
     argv = [ctx.python, str(HERE / "selection.py"), str(ctx.game_folder),
             "--fps", str(s.get("fps", 12)), "--width", str(s.get("width", 1280)),
             "--league", json.dumps(selection_rules(ctx), sort_keys=True),
-            "--options", json.dumps(ctx.options.get("selection") or {}, sort_keys=True)]
+            "--options", json.dumps(selection_options(ctx), sort_keys=True)]
     if float(s.get("audio_weight", 0) or 0) > 0:
         argv.append("--flow_audio")
     return argv
