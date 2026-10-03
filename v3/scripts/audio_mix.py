@@ -32,6 +32,8 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(__file__))
+
 FPS = 30
 SR = 48000
 BED_GAIN_DB = -19.0          # Bed level below full (spec §5.10: 18-20 dB)
@@ -269,7 +271,8 @@ def period_of(moment: float, periods: list[dict]) -> int:
     return best if best is not None else 1
 
 
-def plan_bed(tl: list[dict], periods: list[dict], beds: list[dict], rotation_key: str) -> list[dict]:
+def plan_bed(tl: list[dict], periods: list[dict], beds: list[dict], rotation_key: str,
+             *, bed_choices: dict[int, dict] | None = None) -> list[dict]:
     """
     One Bed segment per run of consecutive entries in the same period. The
     first segment starts at 0 and covers the whole output; later segments
@@ -299,7 +302,8 @@ def plan_bed(tl: list[dict], periods: list[dict], beds: list[dict], rotation_key
             if seg_start <= prev["out_start"]:
                 seg_start = boundary
             prev["out_end"] = seg_start
-        bed = beds[bed_index(beds, rotation_key, per) % len(beds)] if beds else None
+        bed = (bed_choices.get(per) if bed_choices is not None else
+               beds[bed_index(beds, rotation_key, per) % len(beds)] if beds else None)
         segments.append({"period": per, "out_start": round(seg_start, 3), "out_end": round(total, 3),
                          "boundary": round(boundary, 3),
                          "track": bed["id"] if bed else "placeholder",
@@ -659,11 +663,30 @@ def main(argv=None) -> int:
     beds = manifest["beds"] if manifest else []
     if manifest is not None and not beds:
         flag("the Cue Library manifest has no usable Beds; synthesized placeholder Bed")
-    bed_segments = plan_bed(tl, selection.get("periods") or [], beds, _rotation_key(plan, sheet))
+    rotation_key = _rotation_key(plan, sheet)
+    bed_choices = None
+    history_path = None
+    if beds:
+        from cue_library import select_beds
+        history_path = Path(manifest_path).expanduser().resolve().parent / "rotation.json"
+        used_periods = sorted({period_of(float(e.get("moment_s") or e.get("start_s") or 0),
+                                        selection.get("periods") or []) for e in tl})
+        try:
+            bed_choices, rotation_flags = select_beds(beds, rotation_key, used_periods, history_path)
+        except ValueError as exc:
+            flag(f"{exc}; using deterministic Bed selection without saved rotation")
+            history_path = None
+            rotation_flags = []
+        for message in rotation_flags:
+            flag(message)
+    bed_segments = plan_bed(tl, selection.get("periods") or [], beds, rotation_key,
+                            bed_choices=bed_choices)
     bed_bufs: dict[str, np.ndarray] = {}
+    decoded_beds: set[str] = set()
     for b in beds:
         try:
             buf = decode_audio(b["path"], 0.0, float(b.get("duration_s") or 30.0))
+            decoded_beds.add(b["id"])
         except RuntimeError as exc:
             flag(f"Bed {b['id']} could not be decoded ({exc}); synthesized placeholder Bed")
             buf = synth_placeholder_bed()
@@ -808,6 +831,17 @@ def main(argv=None) -> int:
               "loudnorm": {"measured": measured, "output_i": out_i, "output_tp": out_tp},
               "flags": flags}
     (root / REPORT_FILE).write_text(json.dumps(report, indent=2) + "\n")
+    if history_path is not None and bed_choices:
+        from cue_library import record_rotation
+        used_tracks = {s["track"] for s in bed_segments if s["out_end"] > s["out_start"]}
+        recorded = {p: b for p, b in bed_choices.items()
+                    if b["id"] in used_tracks and b["id"] in decoded_beds}
+        try:
+            if recorded:
+                record_rotation(history_path, rotation_key, recorded)
+        except (OSError, ValueError) as exc:
+            flag(f"rotation history could not be saved: {exc}; next game may reuse Beds")
+            (root / REPORT_FILE).write_text(json.dumps(report, indent=2) + "\n")
     i_txt = f"{out_i:.1f} LUFS integrated" if out_i is not None else "loudness not measured"
     tp_txt = f"{out_tp:.1f} dBTP peak" if out_tp is not None else "peak not measured"
     print(f"[mix] {out_name}: {duration_s:.1f}s, {len(cues)} cue(s), {muted} PA span(s) muted, "
