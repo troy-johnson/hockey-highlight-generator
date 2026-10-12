@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "timeline_kind": "detection",
+  "clips_complete": false,
+  "verified_goal_count": 10,
+  "published_goal_count": 11,
+  "source": {
+    "edl": "Desktop/bluedevils_10192025.edl",
+    "edl_sha256": "b9ab462496a4e8e1dab1bf29b39c6adfac6e78707503a16caa82ade0fca6bbe0",
+    "recap_url": "https://www.youtube.com/watch?v=kaMiRPInQL4",
+    "recap_sha256": "6d89fdf92ee9feee599f902768b30031344a4d82e04938e718059aa87464e05f",
+    "published_labels_sha256": "787d303debbd51fdd4fe4e09f4a145121ac0bc14a372fa10970d7e8613105510",
+    "definition": "Visually matched scoring-play frames one sampled second before the published GOAL banner; not exact puck crossings.",
+    "paired_review": ".regression-results/answer-key-review/bluedevils_local_refinement_direct/contact_sheet.png",
+    "paired_review_sha256": "e94dbea167f51f9320adb6d9ee629b287b7d5fc823cd1cd8462e408d415c5ae1",
+    "sync_method": "rink audio; cam2 seek 13.151 seconds after excluding the covered-lens pre-game Recording"
+  },
+  "limits": [
+    "Ten of eleven published goals have verified scoring-play references. Non-goals and Play Types remain unlabeled.",
+    "icepak:7 has a published score change but no independently verified scoring-play reference yet. It remains excluded.",
+    "Recall uses ten verified references, not all eleven published goals.",
+    "Reference points are scoring-play frames, not exact puck crossings. Timing uses 12 fps local samples.",
+    "Two independent timing anchors narrowed the searches. Each final raw frame was checked visually against both cameras.",
+    "The sandbox excludes GX010003.MP4, a verified covered-lens Recording. The original NAS discovery metadata remains unchanged.",
+    "Generated matching scores and predicted times are not labels."
+  ],
+  "timeline": {
+    "cam1": [{"start_s": 0.0, "seek_s": 0.0, "files": ["GX010023.MP4", "GX020023.MP4", "GX030023.MP4"]}],
+    "cam2": [{"start_s": 0.0, "seek_s": 13.151, "files": ["GX010004.MP4", "GX020004.MP4", "GX030004.MP4"]}]
+  },
+  "clips": [
+    {
+      "id": "icepak:1", "reference_s": 972.636934, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 35, "raw_s": 985.787934, "chapter": "GX010004.MP4", "chapter_s": 985.787934,
+        "goal_evidence": "Published GOAL banner at 36 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "icepak_1_paired.png",
+        "paired_image_sha256": "7b848bcdd5e907b9780e01aae71083d84ceb8f3a0741223630a75fed9263911a",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "bluedevils:1", "reference_s": 1171.166667, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 53, "raw_s": 1171.166667, "chapter": "GX010023.MP4", "chapter_s": 1171.166667,
+        "goal_evidence": "Published GOAL banner at 54 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "bluedevils_1_paired.png",
+        "paired_image_sha256": "4d93d144fd5adb03d2cfd1189b693b4a14ce87ffb0803daa120228c0443ee0d1",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:2", "reference_s": 1484.439952, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 84, "raw_s": 1497.590952, "chapter": "GX010004.MP4", "chapter_s": 1497.590952,
+        "goal_evidence": "Published GOAL banner at 85 seconds; visually checked in bluedevils_early_banner_review.jpg.",
+        "paired_image": "icepak_2_paired.png",
+        "paired_image_sha256": "d1609bdf4d85c946ae6bad7fe7f16815cdce3a37fca4bd358fc0320e0ee8c131",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:3", "reference_s": 1520.999334, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 106, "raw_s": 1534.150334, "chapter": "GX010004.MP4", "chapter_s": 1534.150334,
+        "goal_evidence": "Published GOAL banner at 107 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "icepak_3_paired.png",
+        "paired_image_sha256": "b2b5734bc5daae41a71e2cfec7c1f58288b8ca7f89ef696fc76d175f6848579b",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:4", "reference_s": 1724.97447, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 126, "raw_s": 1724.97447, "chapter": "GX010023.MP4", "chapter_s": 1724.97447,
+        "goal_evidence": "Published GOAL banner at 127 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "icepak_4_paired.png",
+        "paired_image_sha256": "b09f9264174d496bcddf607dc10ae523f59ea0ffd2692b14d5a11aa2ae43196c",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:5", "reference_s": 1790.521005, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 146, "raw_s": 1790.521005, "chapter": "GX010023.MP4", "chapter_s": 1790.521005,
+        "goal_evidence": "Published GOAL banner at 147 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "icepak_5_paired.png",
+        "paired_image_sha256": "0e3bc59cba2b026418bbc8f10168af46dc19e11a4151908f11db096bbfdd9a33",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:6", "reference_s": 2077.697333, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 181, "raw_s": 2077.697333, "chapter": "GX020023.MP4", "chapter_s": 160.782333,
+        "goal_evidence": "Published GOAL banner at 182 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "icepak_6_paired.png",
+        "paired_image_sha256": "6773030296daf4a766ec8291e4cba1ea5e13ee8f95eae2986219942a6adbafb8",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "bluedevils:2", "reference_s": 2184.440273, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 201, "raw_s": 2197.591273, "chapter": "GX020004.MP4", "chapter_s": 280.676273,
+        "goal_evidence": "Published GOAL banner at 202 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "bluedevils_2_paired.png",
+        "paired_image_sha256": "748471a2260d4c818cf291aa3537f1ba886edf317dd98863712baab054594288",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:8", "reference_s": 3516.849236, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 295, "raw_s": 3530.000236, "chapter": "GX020004.MP4", "chapter_s": 1613.085236,
+        "goal_evidence": "Published GOAL banner at 296 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "icepak_8_paired.png",
+        "paired_image_sha256": "ad806be468a16a14d8a1670ad44c6e6ac6643ffa5c1026e88925be201436f54d",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "bluedevils:3", "reference_s": 4020.916667, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 334, "raw_s": 4020.916667, "chapter": "GX030023.MP4", "chapter_s": 21.921667,
+        "goal_evidence": "Published GOAL banner at 335 seconds; visually checked in bluedevils_goal_review.jpg.",
+        "paired_image": "bluedevils_3_paired.png",
+        "paired_image_sha256": "6398f90679b063e5c38cc25883121fd07182e308b96d770f14221168f2982525",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "timeline_kind": "detection",
+  "clips_complete": false,
+  "verified_goal_count": 2,
+  "published_goal_count": 3,
+  "source": {
+    "edl": "Desktop/flyers_12142025.edl",
+    "edl_sha256": "d5d32fdcffaf38234164b3f3f78cd9c79f6a62581f43fd1ae05086927e87acfb",
+    "recap_url": "https://www.youtube.com/watch?v=7zRvr-dMwCs",
+    "recap_sha256": "677c4b5ad8c1fc26bdfe37df7090a44c4a5c407fcca803a923368bd4386d95d9",
+    "published_labels_sha256": "881450bf6ea9527ae1eed059bdc22f251b3df974b69fa11121b2604464c632b3",
+    "definition": "Visually matched scoring-play frames one sampled second before the published GOAL banner; not exact puck crossings.",
+    "paired_review": ".regression-results/answer-key-review/flyers_local_refinement_direct/contact_sheet.png",
+    "paired_review_sha256": "78877b61aae3cabe5be833222dab4fdf1a9ac3e4675ad975e902b0c998c99672",
+    "coverage_review": ".regression-results/answer-key-review/flyers_goal3_both_cameras.png",
+    "coverage_review_sha256": "6ce9067f866bedbc772470841158195fb25da18c465c5c665611dac1ba4b52a7",
+    "sync_method": "timecode confirmed by rink audio; zero seek for both cameras"
+  },
+  "limits": [
+    "Only two of the three published goals have independently verified scoring-play references.",
+    "flyers:2 is excluded: cam1 is obstructed near the proposed time, and cam2 shows distant action.",
+    "The excluded goal's published banner is verified, but its raw scoring-play time requires further verification.",
+    "Recall uses the two verified references, not all three published goals. Non-goals and Play Types remain unlabeled.",
+    "Reference points are scoring-play frames, not exact puck crossings. Timing uses 12 fps local samples.",
+    "The NAS folder name is flyers_121142025. The dated EDL and Recap identify the game as 2025-12-14."
+  ],
+  "timeline": {
+    "cam1": [{"start_s": 0.0, "seek_s": 0.0, "files": ["GX010032.MP4", "GX020032.MP4"]}],
+    "cam2": [{"start_s": 0.0, "seek_s": 0.0, "files": ["GX010011.MP4", "GX020011.MP4"]}]
+  },
+  "clips": [
+    {
+      "id": "icepak:1", "reference_s": 257.166667, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 24, "raw_s": 257.166667, "chapter": "GX010011.MP4", "chapter_s": 257.166667,
+        "goal_evidence": "Published GOAL banner at 25 seconds; visually checked in flyers_goal_review.jpg.",
+        "paired_image": "icepak_1_paired.png",
+        "paired_image_sha256": "03f7e9b9b9ac5edf5474b736edbc3cba06563deb18a92ff230da3b212c07c604",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "flyers:1", "reference_s": 1282.083333, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 80, "raw_s": 1282.083333, "chapter": "GX010011.MP4", "chapter_s": 1282.083333,
+        "goal_evidence": "Published GOAL banner at 81 seconds; visually checked in flyers_goal_review.jpg.",
+        "paired_image": "flyers_1_paired.png",
+        "paired_image_sha256": "1558203f36dda5c0444b721f3a3481e7f71f34202d031d9394edc76d979c3487",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    }
+  ]
+}

@@ -395,7 +395,7 @@ def extract_both(cam1: str, cam2: str, rois: dict, fps: int, width: int, verbose
         return tuple(f.result() for f in futures)
 
 
-def main() -> None:
+def main(argv=None, *, signal_extractor=extract_both) -> None:
     ap = argparse.ArgumentParser(
         description="V2 hockey highlight detection (optical flow + audio RMS)"
     )
@@ -447,11 +447,13 @@ def main() -> None:
                     help="scoring weight: post-peak signal drop (default 0.20)")
     ap.add_argument("--signal_cache", default=None, metavar="DIR",
                     help="Keep signals per Recording in DIR and use them again while inputs and settings are unchanged")
+    ap.add_argument("--preserve_peaks", action="store_true",
+                    help="Experimental: keep separate peak windows, compare cameras near each peak, and skip start-time cooldown")
     ap.add_argument("--debug_plot", action="store_true",
                     help="save a PNG of the fused signal with detected peaks "
                          "(saved alongside --out_csv)")
 
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     verbose = args.verbose
 
     # ── Validate scoring weights ─────────────────────────────────────────────
@@ -469,7 +471,7 @@ def main() -> None:
     # ── Extract signals ──────────────────────────────────────────────────────
     log("[INFO] Extracting signals from both cameras...", verbose)
     t0 = time.time()
-    (net1, slot1, audio1), (net2, slot2, audio2) = extract_both(
+    (net1, slot1, audio1), (net2, slot2, audio2) = signal_extractor(
         args.cam1, args.cam2, rois, args.fps, args.width, verbose,
         with_audio=args.audio_weight > 0,
         cache_dir=args.signal_cache,
@@ -512,18 +514,23 @@ def main() -> None:
         )
         log(f"[INFO] Debug plot saved: {plot_path}", verbose)
 
-    # ── Merge windows across cameras ─────────────────────────────────────────
-    intervals = [(w.start_s, w.end_s) for w in (w1 + w2)]
-    merged = merge_intervals(intervals, gap_s=args.merge_gap_s)
-    log(f"[INFO] Merged into {len(merged)} candidate windows (pre-sanitize)", verbose)
+    # ── Build candidate windows ──────────────────────────────────────────────
+    if args.preserve_peaks:
+        candidates = [(w.start_s, w.end_s, w) for w in sorted(w1 + w2, key=lambda w: (w.peak_s, w.cam))]
+        log(f"[INFO] Preserved {len(candidates)} separate peak windows", verbose)
+    else:
+        intervals = [(w.start_s, w.end_s) for w in (w1 + w2)]
+        merged = merge_intervals(intervals, gap_s=args.merge_gap_s)
+        log(f"[INFO] Merged into {len(merged)} candidate windows (pre-sanitize)", verbose)
+        candidates = [(s, e, None) for s, e in merged]
 
     # Clamp start to 0, ensure minimum 0.5 s duration
-    sanitized: list[tuple[float, float]] = []
-    for s, e in merged:
+    sanitized: list[tuple[float, float, Window | None]] = []
+    for s, e, peak in candidates:
         s = max(0.0, float(s))
         e = max(s + 0.5, float(e))
-        sanitized.append((s, e))
-    merged = sanitized
+        sanitized.append((s, e, peak))
+    candidates = sanitized
 
     # ── Normalize for scoring — use P99 of the fused (smoothed) signal ──────
     p99_1 = float(np.percentile(attack1s, 99)) if attack1s.size else 1.0
@@ -533,14 +540,17 @@ def main() -> None:
     log("[INFO] Scoring windows + selecting primary camera...", verbose)
     rows: list[tuple[float, float, float, int, float]] = []
 
-    for s, e in merged:
+    for s, e, peak in candidates:
         st1 = score_window(attack1s, args.fps, s, e)
         st2 = score_window(attack2s, args.fps, s, e)
 
         m1 = st1["max_attack"]
         m2 = st2["max_attack"]
+        if peak is not None:
+            m1 = score_window(attack1s, args.fps, peak.peak_s - 1.0, peak.peak_s + 1.0)["max_attack"]
+            m2 = score_window(attack2s, args.fps, peak.peak_s - 1.0, peak.peak_s + 1.0)["max_attack"]
 
-        primary = 1 if m1 >= m2 else 2
+        primary = peak.cam if peak is not None and m1 == m2 else (1 if m1 >= m2 else 2)
         conf = abs(m1 - m2) / (m1 + m2 + 1e-6)
 
         if primary == 1:
@@ -564,6 +574,8 @@ def main() -> None:
         is_big = color_rank(color) >= color_rank(args.big_color_min)
         max_len = float(args.max_big_win_s) if is_big else float(args.max_win_s)
         if (e - s) > max_len:
+            if peak is not None:
+                s = max(0.0, peak.peak_s - max_len / 2.0)
             e = s + max_len
 
         rows.append((float(s), float(e), float(score), int(primary), float(conf)))
@@ -576,8 +588,8 @@ def main() -> None:
 
     # ── Cooldown suppression ─────────────────────────────────────────────────
     rows_sorted = sorted(rows, key=lambda r: r[0])
-    rows_cd = apply_cooldown(rows_sorted, float(args.cooldown_s))
-    if args.cooldown_s > 0:
+    rows_cd = rows_sorted if args.preserve_peaks else apply_cooldown(rows_sorted, float(args.cooldown_s))
+    if args.cooldown_s > 0 and not args.preserve_peaks:
         log(
             f"[INFO] Cooldown suppression: {len(rows_sorted)} -> {len(rows_cd)} "
             f"(cooldown={args.cooldown_s:.1f}s)",

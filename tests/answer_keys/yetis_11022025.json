@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "timeline_kind": "detection",
+  "clips_complete": false,
+  "verified_goal_count": 9,
+  "verified_non_goal_count": 2,
+  "source": {
+    "edl": "Desktop/yetis_11022025.edl",
+    "edl_sha256": "006d92844f66f8186735125d9b82e50acfaabdbc4e07075be461aea28735751e",
+    "recap_url": "https://www.youtube.com/watch?v=67MCRG0OGzk",
+    "recap_sha256": "4a6baf7674c24ef897d08df73261b7e4d81d0c2c261c7152ba073a3c7114ee5f",
+    "published_labels_sha256": "ba1104ca22b53e4e9e6af659837409df32c94b79a9a153da5cc2786841dfdac8",
+    "definition": "Visually matched scoring-play frames one sampled second before the published GOAL banner; not exact puck crossings.",
+    "paired_review": ".regression-results/answer-key-review/yetis_local_refinement_direct/contact_sheet.png",
+    "paired_review_sha256": "2b5ad3e3d629bf0e39fe34f3ce462adac94cccdfa90204c23b1fe9e9fe5a7fbd",
+    "sync_method": "rink audio, 6/9 agreeing windows; cam2 seek 9.813 seconds",
+    "non_goal_review": ".regression-results/answer-key-review/yetis_non_goal_review_01/verified_non_goal_review.json",
+    "non_goal_review_sha256": "90fa199a50b1d6aa6ac25e9cc18f03f480c5c1f8a52d8c388092e35aa24b262d",
+    "non_goal_definition": "Two published continuing-play references with paired camera/time checks and extended raw context reviewed at four frames per second. No subtype labels inferred."
+  },
+  "limits": [
+    "The nine published goals and two non-goal plays are verified. Other non-goal clips and Play Types remain unlabeled.",
+    "EDL clip edl:008 remains unverified because the goalie obscures the puck during the stoppage. No non-goal label was inferred.",
+    "Negative labels describe the two reviewed plays only. They do not establish whole-game precision or label every point in the reviewed spans.",
+    "EDL Game v1 cuts include logos and credits. The 44 EDL video cuts are not a verified play count.",
+    "Reference points are scoring-play frames, not exact puck crossings. Timing uses 12 fps local samples.",
+    "Two independent matched frames established the search window. Each final raw frame was checked visually.",
+    "Generated detection choices and matching confidence scores are not labels."
+  ],
+  "timeline": {
+    "cam1": [{"start_s": 0.0, "seek_s": 0.0, "files": ["GX010025.MP4", "GX020025.MP4"]}],
+    "cam2": [{"start_s": 0.0, "seek_s": 9.813, "files": ["GX010006.MP4", "GX020006.MP4"]}]
+  },
+  "clips": [
+    {
+      "id": "icepak:1", "reference_s": 844.107072, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 33, "raw_s": 853.920072, "chapter": "GX010006.MP4", "chapter_s": 853.920072,
+        "goal_evidence": "Published GOAL banner at 34 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_1_paired.png",
+        "paired_image_sha256": "dc8fa99f9337777f3ac833089c193292519d14dc2beda79f53b8cd58d99b5cb8",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:2", "reference_s": 1275.966916, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 111, "raw_s": 1285.779916, "chapter": "GX010006.MP4", "chapter_s": 1285.779916,
+        "goal_evidence": "Published GOAL banner at 112 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_2_paired.png",
+        "paired_image_sha256": "0100fa8e1925fce6fd2965fd51b6f08b1b8191f4a711a847e478298465a32d7b",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:3", "reference_s": 1425.937, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 127, "raw_s": 1435.75, "chapter": "GX010006.MP4", "chapter_s": 1435.75,
+        "goal_evidence": "Published GOAL banner at 128 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_3_paired.png",
+        "paired_image_sha256": "10cc6d47c56280da745c39082f72a3d93bb1ae44b60b9aaf43b16f8ed694f5c1",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:4", "reference_s": 1666.10914, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 154, "raw_s": 1675.92214, "chapter": "GX010006.MP4", "chapter_s": 1675.92214,
+        "goal_evidence": "Published GOAL banner at 155 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_4_paired.png",
+        "paired_image_sha256": "ba599713fa7c6054d6e042e26db55eb9b19506d5b813e91704eae3b90731067b",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:5", "reference_s": 2259.105986, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 206, "raw_s": 2259.105986, "chapter": "GX010025.MP4", "chapter_s": 2259.105986,
+        "goal_evidence": "Published GOAL banner at 207 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_5_paired.png",
+        "paired_image_sha256": "bfa121e7187009945454445d9411036b81f669249114e4d52080f33952801d7f",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:6", "reference_s": 2412.054473, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 231, "raw_s": 2412.054473, "chapter": "GX010025.MP4", "chapter_s": 2412.054473,
+        "goal_evidence": "Published GOAL banner at 232 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_6_paired.png",
+        "paired_image_sha256": "8dc5ac26f7f09477f892bc5e79ef5f62fdf717bbb72323e0f593c9e8f2d51951",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "yetis:1", "reference_s": 2732.271771, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 272, "raw_s": 2742.084771, "chapter": "GX020006.MP4", "chapter_s": 151.496771,
+        "goal_evidence": "Published GOAL banner at 273 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "yetis_1_paired.png",
+        "paired_image_sha256": "e9e47822bf42e68432493aca7d1f3ccf27833f25c15d7eb84d76fc66034fcf7b",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:7", "reference_s": 3049.537334, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 291, "raw_s": 3059.350334, "chapter": "GX020006.MP4", "chapter_s": 468.762334,
+        "goal_evidence": "Published GOAL banner at 292 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_7_paired.png",
+        "paired_image_sha256": "fc8795cb17100de6f3b8f4acc57d3adc488979fb9b8d7440e84cd5b737c5ba0b",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:8", "reference_s": 3985.603667, "camera": "cam2", "goal": true,
+      "verified_source": {
+        "published_s": 356, "raw_s": 3995.416667, "chapter": "GX020006.MP4", "chapter_s": 1404.828667,
+        "goal_evidence": "Published GOAL banner at 357 seconds; visually checked in yetis_goal_review.jpg.",
+        "paired_image": "icepak_8_paired.png",
+        "paired_image_sha256": "36d0214081400e619fe6688881fc7b8d7e9a2f62724a9b8240610974c3472b9c",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "non_goal:006", "reference_s": 791.583333, "camera": "cam1", "goal": false,
+      "verified_source": {
+        "edl_clip_id": "edl:006", "published_s": 23.241666666666667, "raw_s": 791.583333,
+        "chapter": "GX010025.MP4", "chapter_s": 791.583333,
+        "review_span_raw_s": [785.797465, 805.369202], "review_rate_fps": 4,
+        "non_goal_evidence": "The puck stays outside the net and moves behind the end line. Players continue the play around the net and along the boards. No goal occurs in the reviewed play.",
+        "paired_image": "edl_006_paired_review.png",
+        "paired_image_sha256": "107bca033140d37f584e9ea1e1f171a99e053cdd24a950a08430b728a679f326",
+        "verification": "Published play sequence, paired reference image, and all raw context sheets visually reviewed. No subtype label inferred."
+      }
+    },
+    {
+      "id": "non_goal:010", "reference_s": 1011.937, "camera": "cam2", "goal": false,
+      "verified_source": {
+        "edl_clip_id": "edl:010", "published_s": 71.13333333333333, "raw_s": 1021.75,
+        "chapter": "GX010006.MP4", "chapter_s": 1021.75,
+        "review_span_raw_s": [1015.789963, 1035.710037], "review_rate_fps": 4,
+        "non_goal_evidence": "The puck stays outside the net and moves behind the end line. Players continue the play around the net and along the boards. No goal occurs in the reviewed play.",
+        "paired_image": "edl_010_paired_review.png",
+        "paired_image_sha256": "0b784472d537ef60168eeae89c885d663522528ab9fd94347c54aef6d2cb4bf6",
+        "verification": "Published play sequence, paired reference image, and all raw context sheets visually reviewed. No subtype label inferred."
+      }
+    }
+  ]
+}

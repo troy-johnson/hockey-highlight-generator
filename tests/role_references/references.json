@@ -1,0 +1,1436 @@
+{
+  "dataset_kind": "independent_visual_role_references",
+  "schema_version": 1,
+  "status": "reviewed_role_references",
+  "protocol_sha256": "02227019ff6208e57235fd2bc8db644b36143be0fed175faadd9b3926dee10e8",
+  "inventory_sha256": "95a56bdae0d68edc24add32cb021d4f3336dce769c2208aa91a482cb3f24fc2b",
+  "manual_annotations_sha256": "83e95ba862c8bc54fc7ff31e4f7817cdbb4a7b4cec8f8ac0f20b294a3a346e72",
+  "review_method": "Visual review of raw center images and nine-frame raw context sheets, without model predictions.",
+  "samples": [
+    {
+      "game_id": "ghostpirates_11092025",
+      "sample_number": 1,
+      "camera": "cam1",
+      "partition": "development",
+      "nominal_detection_s": 1186.333,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            682,
+            102
+          ],
+          "review_crop_xyxy": [
+            590,
+            55,
+            740,
+            250
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The green subject has a white goalie mask and broad green leg pads. The context shows the pads and a large goalie glove while the subject changes stance.",
+          "limitations": [
+            "Net mesh obscures parts of the legs."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            475,
+            82
+          ],
+          "review_crop_xyxy": [
+            430,
+            15,
+            525,
+            210
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The blue subject left of the net has an ordinary helmet, narrow lower legs, and skates. The context shows skating past the side of the net.",
+          "limitations": [
+            "The net partly overlaps the lower legs in the center frame."
+          ]
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            329,
+            117
+          ],
+          "review_crop_xyxy": [
+            290,
+            40,
+            380,
+            230
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The green subject at the left has ordinary gloves, narrow lower legs, and skates. The context shows skating steps with a thin stick.",
+          "limitations": []
+        },
+        {
+          "id": "subject:004",
+          "role": "referee",
+          "status": "verified",
+          "anchor_xy": [
+            1235,
+            140
+          ],
+          "review_crop_xyxy": [
+            1200,
+            90,
+            1265,
+            210
+          ],
+          "evidence_basis": [
+            "referee_stripes"
+          ],
+          "evidence": "The subject at the right wears a black-and-white vertically striped referee jersey.",
+          "limitations": []
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "aacc7fb3168cf270e11a8bea536053f898c42b254ab25520c26be95f71fa2b96",
+      "center_image_sha256": "38099aea85648265af691c5967d2d01ecec74b30ddf2e78832d056a77980f210",
+      "context_image_sha256": "97a230d5c177592456f5dc8134739b38b50bb477c64f9189cc78fb87a585ac25"
+    },
+    {
+      "game_id": "ghostpirates_11092025",
+      "sample_number": 1,
+      "camera": "cam2",
+      "partition": "development",
+      "nominal_detection_s": 1186.333,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            577,
+            112
+          ],
+          "review_crop_xyxy": [
+            515,
+            60,
+            650,
+            285
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The blue subject has a white goalie mask, broad white leg pads, and large goalie gloves. These features remain visible through the context.",
+          "limitations": [
+            "Net mesh and lens marks reduce the detail of the lower body."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "dc2a361c3d223431fd0f12bccf0347da1fe8fb73166e598eed133b6d7dfad5e2",
+      "center_image_sha256": "5b65adf9aab56b1365316bb97cf3eced4e0706bbb5cd8e8c56c3a0fd5808ed78",
+      "context_image_sha256": "e813fbce91fc7f3d5db5753f8afdcc12a02dd82c6aa14d7a61eeea8c964a44a2"
+    },
+    {
+      "game_id": "ghostpirates_11092025",
+      "sample_number": 2,
+      "camera": "cam1",
+      "partition": "development",
+      "nominal_detection_s": 2035.333,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            597,
+            87
+          ],
+          "review_crop_xyxy": [
+            505,
+            20,
+            670,
+            285
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The blue subject wears a goalie mask with rear straps, broad white leg pads, and large goalie gloves.",
+          "limitations": [
+            "Net mesh overlaps the legs."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "b9538a203aca9e5dcefcdb12e327bba466c18e4f1c38103b8e2f3ac4799629dc",
+      "center_image_sha256": "da05eba11942ac0fca613ec2d0e161940f57f8ce4275942c8efb4e4e619ecd04",
+      "context_image_sha256": "0b5fe62e5db818356002374811bfe120886bc4dcd2c1d02d26696ff4f2d61163"
+    },
+    {
+      "game_id": "ghostpirates_11092025",
+      "sample_number": 2,
+      "camera": "cam2",
+      "partition": "development",
+      "nominal_detection_s": 2035.333,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            616,
+            89
+          ],
+          "review_crop_xyxy": [
+            550,
+            15,
+            715,
+            275
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The green subject has a white goalie mask, a large blocker, and broad green leg pads visible through the net.",
+          "limitations": [
+            "Net mesh and lens marks obscure some equipment detail."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            295,
+            177
+          ],
+          "review_crop_xyxy": [
+            225,
+            95,
+            405,
+            325
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The blue foreground subject has an ordinary helmet, narrow lower legs, skates, and a thin stick. The context shows skating past the left side.",
+          "limitations": [
+            "Lens marks reduce image detail."
+          ]
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            886,
+            109
+          ],
+          "review_crop_xyxy": [
+            825,
+            35,
+            935,
+            255
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The white-shirted subject has an ordinary helmet, normal gloves, narrow lower legs, and visible skates.",
+          "limitations": []
+        },
+        {
+          "id": "subject:004",
+          "role": "uncertain",
+          "status": "uncertain",
+          "anchor_xy": [
+            545,
+            48
+          ],
+          "review_crop_xyxy": [
+            525,
+            0,
+            595,
+            95
+          ],
+          "evidence_basis": [
+            "occluded",
+            "insufficient_detail"
+          ],
+          "evidence": "The blue subject behind the green goalie has visible upper clothing, but the foreground people hide the lower equipment in the center frame.",
+          "limitations": [
+            "The selected center-frame role is not verified from the obscured equipment."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "64bd5b70af5339fdcdc587f568875435da3830e6b5f6e768ee88f3ed5697a9c0",
+      "center_image_sha256": "0966dd9847376468032c8882c473ecf3f1ca1800be261fe4cf24cb1d22073150",
+      "context_image_sha256": "f9bd5eba3b8953cb10cfb0f160481438b59769f99b21c84d75344b16715b4c3c"
+    },
+    {
+      "game_id": "flyers_12142025",
+      "sample_number": 1,
+      "camera": "cam1",
+      "partition": "development",
+      "nominal_detection_s": 1427.417,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            551,
+            151
+          ],
+          "review_crop_xyxy": [
+            495,
+            75,
+            620,
+            340
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The orange subject at the net wears a white goalie mask, a large blocker, and broad leg pads visible through the mesh.",
+          "limitations": [
+            "The net overlaps the pads in the center frame."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            396,
+            182
+          ],
+          "review_crop_xyxy": [
+            345,
+            115,
+            475,
+            315
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The blue subject left of the net has ordinary gloves and narrow lower legs with skates. The context shows skating past the side of the net.",
+          "limitations": []
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            120,
+            492
+          ],
+          "review_crop_xyxy": [
+            0,
+            270,
+            360,
+            720
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The orange foreground subject wears an ordinary hockey helmet and two ordinary gloves on a thin stick. Adjacent frames show narrow legs and skating steps.",
+          "limitations": [
+            "The center image cuts off the skates; the context supplies the visible skating evidence."
+          ]
+        },
+        {
+          "id": "subject:004",
+          "role": "referee",
+          "status": "verified",
+          "anchor_xy": [
+            859,
+            123
+          ],
+          "review_crop_xyxy": [
+            825,
+            65,
+            885,
+            230
+          ],
+          "evidence_basis": [
+            "referee_stripes"
+          ],
+          "evidence": "The subject to the right of the net wears a vertically striped black-and-white referee jersey.",
+          "limitations": []
+        },
+        {
+          "id": "subject:005",
+          "role": "uncertain",
+          "status": "uncertain",
+          "anchor_xy": [
+            621,
+            123
+          ],
+          "review_crop_xyxy": [
+            585,
+            65,
+            670,
+            185
+          ],
+          "evidence_basis": [
+            "occluded"
+          ],
+          "evidence": "The orange subject directly beyond the goalie has visible upper clothing and a stick, but the center frame hides the lower equipment.",
+          "limitations": [
+            "The selected center-frame role remains uncertain because the lower equipment overlaps the goalie and net."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "7393914b3b8211b5d6a66695bac0def31a42b415208bb37725f451e07995e15c",
+      "center_image_sha256": "3e9681084b26a6d8fab07e4a59cfbad46d45343a6434e15a46c2a2cc9be74b5b",
+      "context_image_sha256": "dbb28e4e438e04b7bd9c343041011368a9445a11bebb0f832e8227935821708c"
+    },
+    {
+      "game_id": "flyers_12142025",
+      "sample_number": 1,
+      "camera": "cam2",
+      "partition": "development",
+      "nominal_detection_s": 1427.417,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            686,
+            167
+          ],
+          "review_crop_xyxy": [
+            590,
+            90,
+            745,
+            335
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The blue subject has a white goalie mask with rear straps and broad white leg pads. The context also shows a large goalie glove.",
+          "limitations": [
+            "Net mesh partly obscures the lower legs."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "359808efac026203c22543c8628887d48e4d6b1fbb936155ef4b18890e239231",
+      "center_image_sha256": "17aaba2fc326c0818613ea41ad1e94baba2e76d6ca03893ccec507f3bb426aae",
+      "context_image_sha256": "1e567a2701827578cbc78c6ce5ff85e88dc968f293399c90ca4093744154ffc4"
+    },
+    {
+      "game_id": "flyers_12142025",
+      "sample_number": 2,
+      "camera": "cam1",
+      "partition": "development",
+      "nominal_detection_s": 2184.333,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            624,
+            139
+          ],
+          "review_crop_xyxy": [
+            550,
+            70,
+            670,
+            315
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The orange subject wears a goalie mask, a large blocker, and broad leg pads. The adjacent frames expose the pads beside the net.",
+          "limitations": [
+            "Net mesh obscures part of the lower body in the center frame."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "b817ffacf3f1f682ee8380b4fe967a439f2d5ac479759b8f444fef1a7e287f01",
+      "center_image_sha256": "3c038d9786b18ef4dc347245395e8fc626481186fcdd917093a25ba95056faec",
+      "context_image_sha256": "a347515ee73d182616b05b820d2eed5de291a55442aedcb873abc3a07164a3a7"
+    },
+    {
+      "game_id": "flyers_12142025",
+      "sample_number": 2,
+      "camera": "cam2",
+      "partition": "development",
+      "nominal_detection_s": 2184.333,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            671,
+            177
+          ],
+          "review_crop_xyxy": [
+            560,
+            110,
+            750,
+            365
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The blue subject has a goalie mask, a large catcher glove resting on the crossbar, and broad white leg pads.",
+          "limitations": [
+            "Net mesh partly obscures the pads."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            413,
+            125
+          ],
+          "review_crop_xyxy": [
+            390,
+            85,
+            480,
+            185
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The blue subject at the left has narrow lower legs and skates, two ordinary gloves, and a thin hockey stick. The context shows separate skating steps.",
+          "limitations": [
+            "The crop does not include the complete stick."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "9d44af6a811b3683aeee90d12c9801026ff105f30f8fa3bd8ba7bf9f2b2b88f2",
+      "center_image_sha256": "cfb7525a450ffbd1615dcae943f2958487ba16675132491cdab799d592324a1e",
+      "context_image_sha256": "f34a8dd1edc902f83f78a71974933185eb220993b0be406586259b8c27707733"
+    },
+    {
+      "game_id": "yetis_11022025",
+      "sample_number": 1,
+      "camera": "cam1",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 1570.917,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            593,
+            145
+          ],
+          "review_crop_xyxy": [
+            490,
+            95,
+            665,
+            340
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The blue subject wears a white goalie mask with rear straps, broad white leg pads, and a large rectangular blocker.",
+          "limitations": [
+            "Net mesh and lens marks reduce the equipment detail."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "d36ae1fe2c75371b6aaeaf92f6102282e4c9dea93ec445a1137c2ad1a8c9c805",
+      "center_image_sha256": "e4f5feff035797e5d8c1a32a0e26ab9f0439ae9706220cdeaa334a02dce832d3",
+      "context_image_sha256": "d6c0271d9190a38d31e886138098034716e86682ea63d6bf510faa99551c9acf"
+    },
+    {
+      "game_id": "yetis_11022025",
+      "sample_number": 1,
+      "camera": "cam2",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 1570.917,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            544,
+            177
+          ],
+          "review_crop_xyxy": [
+            475,
+            120,
+            630,
+            370
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The subject at the net has broad dark leg pads and a large orange goalie glove visible at the left. The context shows the broad lower equipment during stance changes.",
+          "limitations": [
+            "The net obscures part of the pads, and the dark mask has limited detail."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            770,
+            163
+          ],
+          "review_crop_xyxy": [
+            730,
+            110,
+            810,
+            270
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The blue subject just right of the net has an ordinary helmet, narrow white lower legs, and skates. The context shows skating across the front of the net.",
+          "limitations": []
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            132,
+            226
+          ],
+          "review_crop_xyxy": [
+            90,
+            175,
+            225,
+            320
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The blue subject at the left has normal gloves on a thin stick, narrow lower legs, and visible skates during a skating stride.",
+          "limitations": []
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "1098be059095328e4c0ea5b2add29ad38014cc04ab53f6af991b2c01adcc1881",
+      "center_image_sha256": "6bf7d5b45b54cd05a7267675ef96ef0f3c807945a64e6698559412114473b8d7",
+      "context_image_sha256": "b3be615fc69a058e59dc10f061af2caf759b39d6ef0b5c389dd6ff0ac9b064d5"
+    },
+    {
+      "game_id": "yetis_11022025",
+      "sample_number": 2,
+      "camera": "cam1",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 2809.0,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            548,
+            147
+          ],
+          "review_crop_xyxy": [
+            465,
+            90,
+            635,
+            335
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The crouched blue subject has broad dark leg pads and a large goalie glove. The context shows the broad pads as the subject moves sideways.",
+          "limitations": [
+            "The net and another blue subject overlap part of the upper body."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            626,
+            96
+          ],
+          "review_crop_xyxy": [
+            585,
+            40,
+            685,
+            210
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The blue subject directly beyond the goalie has an ordinary helmet and gloves, a thin stick, narrow lower legs, and skates. The context shows skating around the right side.",
+          "limitations": [
+            "The crossbar partly overlaps the lower body in the center frame."
+          ]
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            725,
+            83
+          ],
+          "review_crop_xyxy": [
+            700,
+            30,
+            765,
+            155
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The dark-blue subject to the right has narrow lower legs and skates, an ordinary helmet, and a thin stick.",
+          "limitations": []
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "d8ce7dc7583cecfd73b9fc85a54eaf569def57fcb27e7a8234de92d5177fd03a",
+      "center_image_sha256": "a1157024738f16ce8986d19eb9cae0286b3b7f8d885a62372dec811e03da0c46",
+      "context_image_sha256": "e6d73721d1d1e2926007675e1a0ca1a9a7f54ff5f025e99cf1c08bef818f684f"
+    },
+    {
+      "game_id": "yetis_11022025",
+      "sample_number": 2,
+      "camera": "cam2",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 2809.0,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            633,
+            180
+          ],
+          "review_crop_xyxy": [
+            560,
+            115,
+            710,
+            380
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The blue subject wears a white goalie mask with rear straps, broad white leg pads, and large goalie gloves.",
+          "limitations": [
+            "The net overlaps part of the equipment."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "c072180bb077e49f14489d0975ea6ba2582e61e5c4511d2ec573820551dd485f",
+      "center_image_sha256": "075fa985f62ee518680748209c3202a46539a9df9de164e07b86761147d1f14a",
+      "context_image_sha256": "505c9e0439bf7f79e2474e8201d392eee9200cd53f2ed41c22d909c5a21d98b5"
+    },
+    {
+      "game_id": "blb_01042026",
+      "sample_number": 1,
+      "camera": "cam1",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 1585.417,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            667,
+            91
+          ],
+          "review_crop_xyxy": [
+            590,
+            30,
+            745,
+            280
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The green subject has a white goalie mask with rear straps, broad dark leg pads, and a large catcher glove resting on the crossbar.",
+          "limitations": [
+            "Net mesh partly overlaps the legs."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "6706d4844d9f2d969ebed00f3e928169fe6a4d17c22b57956c6cf8bb11fc8484",
+      "center_image_sha256": "04df206b5ad2d2395aadda09263133ae49736c6a57561dfc7e803a383b508b24",
+      "context_image_sha256": "43a79493ec88fb88108b22183094c003ce64f0cde1f459582c8f860973a333cb"
+    },
+    {
+      "game_id": "blb_01042026",
+      "sample_number": 1,
+      "camera": "cam2",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 1585.417,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            729,
+            145
+          ],
+          "review_crop_xyxy": [
+            585,
+            80,
+            835,
+            315
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The crouched purple subject wears a white goalie mask, broad white leg pads, and large goalie gloves. The context exposes the pads during stance changes.",
+          "limitations": [
+            "The net partly obscures the body."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            643,
+            76
+          ],
+          "review_crop_xyxy": [
+            590,
+            25,
+            685,
+            180
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The purple subject just beyond the left post has an ordinary helmet and gloves, narrow lower legs, and skates.",
+          "limitations": [
+            "The crossbar overlaps part of the legs."
+          ]
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            860,
+            93
+          ],
+          "review_crop_xyxy": [
+            810,
+            25,
+            910,
+            190
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The purple subject right of the net wears ordinary gloves and narrow lower equipment with skates. The context shows skating across the front of the net.",
+          "limitations": []
+        },
+        {
+          "id": "subject:004",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            1135,
+            311
+          ],
+          "review_crop_xyxy": [
+            1010,
+            195,
+            1240,
+            520
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The purple foreground subject has an ordinary helmet and gloves, narrow lower legs, and visible skates while holding a thin stick.",
+          "limitations": []
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "248b11796aa580aeecb9c6a44174303ea46580054c9c53337c62146d622d49db",
+      "center_image_sha256": "a87d10c99d30f83e719a3a6a7cbe0f93e6ec9b16f07f7ec1cbfae2f6361f0eac",
+      "context_image_sha256": "c15cbfe379881ca0b06ee2324cbb78be1efabe59f795cdcb22cd6778d5262605"
+    },
+    {
+      "game_id": "blb_01042026",
+      "sample_number": 2,
+      "camera": "cam1",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 2692.917,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            628,
+            62
+          ],
+          "review_crop_xyxy": [
+            560,
+            0,
+            735,
+            300
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The purple subject has a white goalie mask, broad white leg pads, and large goalie gloves visible at either side.",
+          "limitations": [
+            "Net mesh overlaps the pads."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "369a22afb3c0d1c50c55570797ca6b56d80c13e90865e04c1bca0136f8945a0f",
+      "center_image_sha256": "25fb96fda5d670b2f811bd59fc1a7e7707b62e143d4f95bfc0131788a5fb8f3a",
+      "context_image_sha256": "7632105072b573a0e3fe43933b588606d469f564033ef375faf276b101c466e1"
+    },
+    {
+      "game_id": "blb_01042026",
+      "sample_number": 2,
+      "camera": "cam2",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 2692.917,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            600,
+            96
+          ],
+          "review_crop_xyxy": [
+            510,
+            40,
+            710,
+            295
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The green subject has a white goalie mask, broad dark leg pads, and a large catcher glove on the crossbar.",
+          "limitations": [
+            "Net mesh partly obscures the lower body."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            297,
+            114
+          ],
+          "review_crop_xyxy": [
+            245,
+            50,
+            370,
+            240
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The white subject at the left has an ordinary helmet, two ordinary gloves, narrow lower legs, and skates. The context shows skating steps toward the net.",
+          "limitations": []
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            465,
+            66
+          ],
+          "review_crop_xyxy": [
+            420,
+            20,
+            505,
+            155
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The purple subject just left of the goalie has an ordinary helmet and gloves, narrow lower legs, and skates.",
+          "limitations": []
+        },
+        {
+          "id": "subject:004",
+          "role": "referee",
+          "status": "verified",
+          "anchor_xy": [
+            1232,
+            165
+          ],
+          "review_crop_xyxy": [
+            1180,
+            105,
+            1280,
+            250
+          ],
+          "evidence_basis": [
+            "referee_stripes"
+          ],
+          "evidence": "The subject at the right wears a vertically striped black-and-white referee jersey.",
+          "limitations": []
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "13967a8c30159d9313a1bed96501e806ff2f2af2c77edac208b03b48a9489b2b",
+      "center_image_sha256": "6baa59d4ec23a34c23e278dec339daec3393ab096945ce457ddb8208b1c16b66",
+      "context_image_sha256": "f53d3463f00926880844dad2680f1ffc80283e32b51dbc5bfd5092ac3089e97c"
+    },
+    {
+      "game_id": "bluedevils_10192025",
+      "sample_number": 1,
+      "camera": "cam1",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 1566.583,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            618,
+            147
+          ],
+          "review_crop_xyxy": [
+            555,
+            85,
+            705,
+            345
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The dark-blue subject has a goalie mask with rear straps, broad white leg pads, and large goalie gloves.",
+          "limitations": [
+            "Net mesh overlaps the legs."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "6f034e16eb6755f977fc5771f9333dc57bee43277666a408e3ec10471bf90067",
+      "center_image_sha256": "6afb8ea38fc1049cf368d90bfaf790874a6d697ff4cedcd606f567d0287fb168",
+      "context_image_sha256": "12d04e422bfb634ab6b28a3251dc59af8a4308ed53fa11f1efe69ef8d90490b7"
+    },
+    {
+      "game_id": "bluedevils_10192025",
+      "sample_number": 1,
+      "camera": "cam2",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 1566.583,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            720,
+            208
+          ],
+          "review_crop_xyxy": [
+            650,
+            155,
+            790,
+            380
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The light-blue subject at the net has a goalie mask and broad dark leg pads. The context exposes the pads and large gloves during side-to-side stance changes.",
+          "limitations": [
+            "Net mesh partly obscures the legs."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            504,
+            198
+          ],
+          "review_crop_xyxy": [
+            460,
+            140,
+            535,
+            280
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The light-blue subject beside the left post has an ordinary helmet and narrow lower legs with skates. Adjacent frames show skating across the side of the net.",
+          "limitations": [
+            "The foreground white subject hides part of the lower body in the center frame."
+          ]
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            484,
+            388
+          ],
+          "review_crop_xyxy": [
+            335,
+            215,
+            670,
+            720
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The white foreground subject has an ordinary helmet and gloves with narrow lower legs. Adjacent frames show ordinary skates and skating steps around the net.",
+          "limitations": [
+            "Lens marks and the frame edge obscure part of the legs in the center image."
+          ]
+        },
+        {
+          "id": "subject:004",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            1074,
+            579
+          ],
+          "review_crop_xyxy": [
+            850,
+            375,
+            1260,
+            720
+          ],
+          "evidence_basis": [
+            "visible_equipment",
+            "visible_skating"
+          ],
+          "evidence": "The light-blue foreground subject has an ordinary helmet and gloves on a thin stick. The context shows narrow lower legs and skating steps before and after the center frame.",
+          "limitations": [
+            "The center frame cuts off the lower legs."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "287bdf09f16593cfdd4f4b4278bca36d6f339db2f136344b2144a1e2759c62d3",
+      "center_image_sha256": "ce8f18b2f770f27ebc499c681ad286e2ba6c5b8f0f863708cf75d624ea66d993",
+      "context_image_sha256": "8ad896348674e5d1a8a062f9aadd0f36d1f69fb5e11fe6bd0625475a3973be9d"
+    },
+    {
+      "game_id": "bluedevils_10192025",
+      "sample_number": 2,
+      "camera": "cam1",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 2813.5,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            466,
+            199
+          ],
+          "review_crop_xyxy": [
+            405,
+            135,
+            540,
+            315
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The light-blue subject beside the left post wears broad dark goalie pads with white outer panels and a large blocker. The context shows the goalie mask and broad pads as the subject straightens.",
+          "limitations": [
+            "The leaning pose overlaps the near post."
+          ]
+        },
+        {
+          "id": "subject:002",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            523,
+            126
+          ],
+          "review_crop_xyxy": [
+            480,
+            70,
+            575,
+            200
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The light-blue subject beyond the left post has an ordinary helmet, normal gloves, narrow lower legs, and skates with a thin stick.",
+          "limitations": []
+        },
+        {
+          "id": "subject:003",
+          "role": "skater",
+          "status": "verified",
+          "anchor_xy": [
+            766,
+            131
+          ],
+          "review_crop_xyxy": [
+            725,
+            75,
+            810,
+            215
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The light-blue subject right of the net has an ordinary helmet, normal gloves, narrow lower legs, and skates.",
+          "limitations": []
+        },
+        {
+          "id": "subject:004",
+          "role": "referee",
+          "status": "verified",
+          "anchor_xy": [
+            174,
+            270
+          ],
+          "review_crop_xyxy": [
+            125,
+            160,
+            235,
+            435
+          ],
+          "evidence_basis": [
+            "referee_stripes"
+          ],
+          "evidence": "The foreground subject at the left wears a vertically striped black-and-white referee jersey.",
+          "limitations": []
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "875835548083655da12ce736291fe7d352d59b1759348e4f0b6c4378d952af8e",
+      "center_image_sha256": "1302645e9bbc3420a6f51c79c2036bae92541cdd3ba3a9f6148d50b683d4bd9b",
+      "context_image_sha256": "b3b22bd42ed7927de6f749c9724233714b4b1654b834ad3aec9a8ec58271ded3"
+    },
+    {
+      "game_id": "bluedevils_10192025",
+      "sample_number": 2,
+      "camera": "cam2",
+      "partition": "reserved_evaluation",
+      "nominal_detection_s": 2813.5,
+      "status": "reviewed",
+      "scope": "selected_visible_subjects_only",
+      "absence_verified": false,
+      "subjects": [
+        {
+          "id": "subject:001",
+          "role": "goalie",
+          "status": "verified",
+          "anchor_xy": [
+            589,
+            187
+          ],
+          "review_crop_xyxy": [
+            540,
+            125,
+            675,
+            340
+          ],
+          "evidence_basis": [
+            "visible_equipment"
+          ],
+          "evidence": "The dark-blue subject wears a white goalie mask with rear straps, broad white leg pads, and large goalie gloves.",
+          "limitations": [
+            "Net mesh partly obscures the lower body."
+          ]
+        }
+      ],
+      "center_cache_index": 4,
+      "frame_size": [
+        1280,
+        720
+      ],
+      "frame_cache_sha256": "461198ab0126accb8895c77a6a4a003cbfa51f06a9e930bae3f2654bfbee23d0",
+      "center_image_sha256": "ae11e96b1ae30bde3ba3002b69cc2aa10cc5f4709f7641397d1d350b1441e0ba",
+      "context_image_sha256": "0f9db579755417628fd32e9fb2fd9a4eedf8e70d306d3dc259b5e976fb58bc45"
+    }
+  ],
+  "can_filter": false,
+  "can_reassign_camera": false,
+  "limits": [
+    "A visual reference is a role label for a selected center-frame subject, not an outcome or Play Type.",
+    "Subject points and crops do not establish full-body boxes or identity across frames.",
+    "These selected subjects do not enumerate all people or establish absent players.",
+    "Reserved evaluation samples are not held-out games. No model or camera rule was fitted during intake."
+  ]
+}

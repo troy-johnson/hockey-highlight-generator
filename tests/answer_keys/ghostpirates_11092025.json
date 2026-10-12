@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "timeline_kind": "detection",
+  "clips_complete": false,
+  "published_clip_count": 20,
+  "source": {
+    "file": "selection_validation.json",
+    "sha256": "9481c6db2bb48ef29af664cac1697efdeaf824c2457e42401bb0fa4be1d2a1d1",
+    "origin": "Desktop/Game.edl and https://www.youtube.com/watch?v=Br0L5uCKMOA",
+    "definition": "Visually matched scoring-play frames at music cue minus one second; not exact puck crossings."
+  },
+  "limits": [
+    "Only 15 verified scoring-play references are available; five published clips are not mapped.",
+    "Reference points are not exact puck crossings. Generated choices and verdicts are not labels."
+  ],
+  "timeline": {
+    "cam1": [{"start_s": 0.0, "seek_s": 0.0, "files": ["GX010027.MP4"]}],
+    "cam2": [{"start_s": 0.0, "seek_s": 20.069, "files": ["GX010008.MP4"]}]
+  },
+  "clips": [
+    {"id": "home:1", "reference_s": 321.272, "camera": "cam2", "goal": true},
+    {"id": "home:2", "reference_s": 903.524, "camera": "cam2", "goal": true},
+    {"id": "away:1", "reference_s": 950.253, "camera": "cam1", "goal": true},
+    {"id": "away:2", "reference_s": 986.588, "camera": "cam1", "goal": true},
+    {"id": "away:3", "reference_s": 1704.189, "camera": "cam2", "goal": true},
+    {"id": "away:4", "reference_s": 1982.579, "camera": "cam2", "goal": true},
+    {"id": "away:5", "reference_s": 2126.027, "camera": "cam2", "goal": true},
+    {"id": "away:6", "reference_s": 2412.752, "camera": "cam2", "goal": true},
+    {"id": "away:7", "reference_s": 2874.813, "camera": "cam1", "goal": true},
+    {"id": "away:8", "reference_s": 2989.085, "camera": "cam1", "goal": true},
+    {"id": "home:3", "reference_s": 3041.109, "camera": "cam2", "goal": true},
+    {"id": "away:9", "reference_s": 3071.346, "camera": "cam1", "goal": true},
+    {"id": "away:10", "reference_s": 3224.283, "camera": "cam1", "goal": true},
+    {"id": "away:11", "reference_s": 3347.409, "camera": "cam1", "goal": true},
+    {"id": "away:12", "reference_s": 3465.147, "camera": "cam1", "goal": true}
+  ]
+}

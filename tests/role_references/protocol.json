@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "issue": "hhg-3r5.100",
+  "status": "frozen_before_new_frame_review",
+  "source_run": ".regression-results/validation/20261011T201941.620080Z-9cdbb238",
+  "rank_fractions": [0.375, 0.625],
+  "order": ["interval_center", "start_s", "end_s", "primary_cam", "event_id"],
+  "rank_rule": "min(event_count - 1, floor(event_count * rank_fraction))",
+  "time_rule": "original combined candidate interval center",
+  "cameras": ["cam1", "cam2"],
+  "sample_offsets_s": [-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0],
+  "width": 1280,
+  "partitions": {
+    "development": ["ghostpirates_11092025", "flyers_12142025"],
+    "reserved_evaluation": ["yetis_11022025", "blb_01042026", "bluedevils_10192025"]
+  },
+  "missing_source_rule": "Keep the planned sample unavailable; do not replace it with another time.",
+  "annotation_rule": "Review raw center frames and adjacent context without prediction overlays. Record visible equipment or movement evidence, not model labels or net position alone. Keep uncertain or occluded roles explicit.",
+  "annotation_scope": "Visible people around the nearer net in each center frame. References do not enumerate every person or establish absent players.",
+  "reference_geometry": "A manually selected image point and review crop identify the visible subject. Neither is a full-body ground-truth bounding box or a track.",
+  "known_review_overlap_rule": "Record overlap with prior source samples and dense diagnostic cache intervals. Do not move overlapping samples or claim they are unseen.",
+  "separation": "Role references remain separate from outcome keys and generated predictions. No role rule or model changes are permitted during intake.",
+  "limits": [
+    "All five games have prior outcome evaluation; this is not a held-out game partition.",
+    "A reserved evaluation partition has no role-rule fitting during this intake. It is not proof that nobody previously viewed the footage.",
+    "Two candidate-selected times per game do not measure whole-game role accuracy, camera safety, or precision.",
+    "Nominal sample bins are not exact frame timestamps or verified total sync accuracy.",
+    "Still frames and short context do not establish goal outcomes, Play Types, or exact camera handovers."
+  ],
+  "can_filter": false,
+  "can_reassign_camera": false
+}

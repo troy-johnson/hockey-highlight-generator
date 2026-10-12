@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "timeline_kind": "detection",
+  "clips_complete": false,
+  "verified_goal_count": 3,
+  "verified_non_goal_count": 3,
+  "published_goal_count": 3,
+  "source": {
+    "edl": "Desktop/blb_01042026.edl",
+    "edl_sha256": "f9f0a2c74923f2ad8beecfcb646edf4951a1cf57601de78e17d847b21c07cb4b",
+    "recap_url": "https://www.youtube.com/watch?v=OndBGzB3Nwg",
+    "recap_sha256": "7be2c08d71aa5ce5e0501a10a17dd27bda3418362418963fc8a25e06fb84a522",
+    "published_labels_sha256": "3226b1a90a8a6ba98b3805df2856538065b4832305ba2deb43f4d98b7f3ad522",
+    "definition": "Visually matched scoring-play frames one sampled second before the published GOAL banner; not exact puck crossings.",
+    "paired_review": ".regression-results/answer-key-review/blb_local_refinement_direct/contact_sheet.png",
+    "paired_review_sha256": "d94c9554e7df58031c3752de5d0fe20884685074c1c5f7b4f66d0c45e4624fac",
+    "sync_method": "later rink audio window, 5/9 agreeing windows; cam2 seek 1.331 seconds",
+    "non_goal_review": ".regression-results/answer-key-review/blb_non_goal_review_01/verified_non_goal_review.json",
+    "non_goal_review_sha256": "f9787cdb37da1640eca42f1fa3a410956f52b0f3caa39a4d7286353c78fba5fb",
+    "non_goal_definition": "Three published non-scoring plays with paired camera/time checks and extended raw context reviewed at four frames per second. No subtype labels inferred."
+  },
+  "limits": [
+    "All three published goals have verified scoring-play references. Three non-goal plays are now verified; other non-goals and Play Types remain unlabeled.",
+    "Negative labels describe the three reviewed plays only. They do not establish whole-game precision or label every point in the reviewed spans.",
+    "Reference points are scoring-play frames, not exact puck crossings. Timing uses 12 fps local samples.",
+    "Low-contrast alignment and timing anchors narrowed the searches. Each final raw frame was checked visually.",
+    "Generated matching scores and predicted times are not labels.",
+    "The EDL names the game as 2026-01-04. The mapped NAS folder is named buzzlightbeer_01042025."
+  ],
+  "timeline": {
+    "cam1": [{"start_s": 0.0, "seek_s": 0.0, "files": ["GX010034.MP4", "GX020034.MP4"]}],
+    "cam2": [{"start_s": 0.0, "seek_s": 1.331, "files": ["GX010013.MP4", "GX020013.MP4"]}]
+  },
+  "clips": [
+    {
+      "id": "blb:1", "reference_s": 1427.166667, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 45, "raw_s": 1427.166667, "chapter": "GX010034.MP4", "chapter_s": 1427.166667,
+        "goal_evidence": "Published GOAL banner at 46 seconds; visually checked in blb_goal_review.jpg.",
+        "paired_image": "blb_1_paired.png",
+        "paired_image_sha256": "c669e39f11d0048c70224d7f9e89a6b063980b98e656262c03b7030275cdfb46",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:1", "reference_s": 3138.544304, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 151, "raw_s": 3138.544304, "chapter": "GX010034.MP4", "chapter_s": 3138.544304,
+        "goal_evidence": "Published GOAL banner at 152 seconds; visually checked in blb_goal_review.jpg.",
+        "paired_image": "icepak_1_paired.png",
+        "paired_image_sha256": "c5e8ed880b5940e7f7bc2ad906375a50b9e8cbb1e5c478b15d3f265b8ffe548e",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "icepak:2", "reference_s": 3563.583333, "camera": "cam1", "goal": true,
+      "verified_source": {
+        "published_s": 185, "raw_s": 3563.583333, "chapter": "GX010034.MP4", "chapter_s": 3563.583333,
+        "goal_evidence": "Published GOAL banner at 186 seconds; visually checked in blb_goal_review.jpg.",
+        "paired_image": "icepak_2_paired.png",
+        "paired_image_sha256": "9fdabe5302b980910ee544d4ed58b7c4797d2b00e2b8e99461f936ee00a61f07",
+        "verification": "published goal banner and paired raw frame visually checked"
+      }
+    },
+    {
+      "id": "non_goal:003", "reference_s": 306.0, "camera": "cam1", "goal": false,
+      "verified_source": {
+        "edl_clip_id": "edl:003", "published_s": 7.225, "raw_s": 306.0,
+        "chapter": "GX010034.MP4", "chapter_s": 306.0,
+        "review_span_raw_s": [301.552496, 316.447504], "review_rate_fps": 4,
+        "non_goal_evidence": "The goalie stops the attack. Play stops, then restarts with a faceoff beside the same net. No goal occurs in the reviewed play.",
+        "paired_image": "edl_003_paired_review.png",
+        "paired_image_sha256": "2176c37ce551793bc9292f2e31158c91aa7bbf360750225410259ee655ac00d8",
+        "verification": "Published play sequence, paired reference image, and all raw context sheets visually reviewed. No subtype label inferred."
+      }
+    },
+    {
+      "id": "non_goal:006", "reference_s": 770.919, "camera": "cam2", "goal": false,
+      "verified_source": {
+        "edl_clip_id": "edl:006", "published_s": 21.491666666666667, "raw_s": 772.25,
+        "chapter": "GX010013.MP4", "chapter_s": 772.25,
+        "review_span_raw_s": [766.317494, 784.182506], "review_rate_fps": 4,
+        "non_goal_evidence": "The puck travels outside the net behind the end line. Players continue the play along the boards and around the net. No goal occurs in the reviewed play.",
+        "paired_image": "edl_006_paired_review.png",
+        "paired_image_sha256": "e91f8440629b82611d7f6038ed05612806ddb042aae75dd1c74d6f54f52fa8f7",
+        "verification": "Published play sequence, paired reference image, and all raw context sheets visually reviewed. No subtype label inferred."
+      }
+    },
+    {
+      "id": "non_goal:009", "reference_s": 1268.833333, "camera": "cam1", "goal": false,
+      "verified_source": {
+        "edl_clip_id": "edl:009", "published_s": 36.40833333333333, "raw_s": 1268.833333,
+        "chapter": "GX010034.MP4", "chapter_s": 1268.833333,
+        "review_span_raw_s": [1263.725829, 1279.940838], "review_rate_fps": 4,
+        "non_goal_evidence": "The puck moves outside the net behind the end line during the net scramble. Players continue the play as a skater falls and gets up. No goal occurs in the reviewed play.",
+        "paired_image": "edl_009_paired_review.png",
+        "paired_image_sha256": "af79cd235899bae9450218492a0ce5d1632d4a0decd482084f6292408c606c03",
+        "verification": "Published play sequence, paired reference image, and all raw context sheets visually reviewed. No subtype label inferred."
+      }
+    }
+  ]
+}

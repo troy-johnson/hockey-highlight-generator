@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "games": [
+    {
+      "id": "ghostpirates_11092025",
+      "folder": "ghostpirates_11092025",
+      "answer_key": "ghostpirates_11092025.json"
+    },
+    {
+      "id": "yetis_11022025",
+      "folder": "yetis_11022025",
+      "answer_key": "yetis_11022025.json"
+    },
+    {
+      "id": "flyers_12142025",
+      "folder": "flyers_121142025",
+      "answer_key": "flyers_12142025.json"
+    },
+    {
+      "id": "blb_01042026",
+      "folder": "buzzlightbeer_01042025",
+      "answer_key": "blb_01042026.json"
+    },
+    {
+      "id": "bluedevils_10192025",
+      "folder": "bluedevils_10192025",
+      "answer_key": "bluedevils_10192025.json"
+    }
+  ]
+}
