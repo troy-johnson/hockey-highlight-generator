@@ -109,7 +109,7 @@ export const RegionalCard = ({data, teams, duration, vertical, kind}) => {
   const detail = call ? data.reason : goal ? (data.assistsKnown === false ? 'ASSISTS NOT VERIFIED' :
     assists.length ? `${assists.length === 1 ? 'ASSIST' : 'ASSISTS'}: ${assists.join(', ')}` : 'UNASSISTED') :
     [data.infraction, ...(data.additional || []).map(p => p.classification?.toUpperCase())].filter(Boolean).join(' · ');
-  const valueLabel = goal ? 'SCORE' : call ? 'RESULT' : (data.classification === 'major' ? 'MAJOR' : 'PENALTY');
+  const valueLabel = goal ? 'SCORE' : call ? 'RESULT' : (data.classification?.toLowerCase() === 'major' ? 'MAJOR' : 'PENALTY');
   const value = goal ? (data.score || []).join('–') : call ? data.penaltyDisposition :
     data.minutes == null || data.minutes === '?' ? '—' : `${data.minutes} MIN`;
   const g = enter(c, 0), logo = enter(c, 3, 6), name = enter(c, 9, 6), box = enter(c, 12, 6);

@@ -41,6 +41,16 @@ def game():
     return sheet, selection, plan, audio
 
 
+def acoustic_proofs(plan, selection, signals):
+    """Stub the measured onset at the bound time for isolated schedule tests."""
+    from audio_mix import build_timeline
+    from whistle_presentation import METHOD, presentation_piece, source_binding
+    timeline = build_timeline(plan, selection=selection, audio_signals=signals)
+    return [{"goal_id": e["goal_id"], "mapped_t": e["confirmation_out"], "onset_t": e["confirmation_out"],
+             "method": METHOD, "piece": source_binding(presentation_piece(timeline, e["goal_id"], e["confirmation_out"]))}
+            for e in timeline if e.get("confirmation_out") is not None]
+
+
 def test_props_writer_credits_sheet_players_and_cue_times(tmp_path):
     import recap_graphics as rg
     sheet, selection, plan, audio = game()
@@ -320,6 +330,8 @@ def test_cli_runs_alpha_renderer_then_overlay_with_audio_copy(tmp_path, monkeypa
     import recap_graphics as rg
     sheet, selection, plan, audio = game()
     next(c for c in audio["cues"] if c["cue"] == "sfx_penalty_card")["t"] = 25
+    signals = {"whistles": [{"t": 15}, {"t": 125}, {"t": 35}]}
+    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
     for name, data in [("game_sheet.json", sheet), ("selection.json", selection),
                        ("recap_assembly.json", plan), ("recap_audio.json", audio)]:
         (tmp_path / name).write_text(json.dumps(data))
@@ -372,6 +384,8 @@ def test_cli_render_failure_does_not_publish_success(tmp_path, monkeypatch, free
     monkeypatch.setattr(rg.tempfile, "gettempdir", lambda: str(system_temp))
     sheet, selection, plan, audio = game()
     next(c for c in audio["cues"] if c["cue"] == "sfx_penalty_card")["t"] = 25
+    signals = {"whistles": [{"t": 15}, {"t": 125}, {"t": 35}]}
+    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
     for name, data in [("game_sheet.json", sheet), ("selection.json", selection),
                        ("recap_assembly.json", plan), ("recap_audio.json", audio)]:
         (tmp_path / name).write_text(json.dumps(data))

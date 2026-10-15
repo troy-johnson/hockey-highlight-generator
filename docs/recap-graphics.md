@@ -52,6 +52,7 @@ Only the frozen snapshot supplies names, numbers, score, date, and statistics. A
 Coverage supplies periods. The stage checks presentation cues against the matched whistle and rejects an early cue.
 The mix confirms onset in the kept-camera audio and records `presentation_whistles` with the matched time, onset, and method.
 Graphics checks that proof against the unchanged source timeline. It does not use an earlier merged-camera timestamp for presentation.
+The proof includes the exact source mapping. An older report without proof needs `rerun --from mix`.
 It reads the mixed video named by `recap_audio.json.output`.
 The assembly uses schema 3 at 30 fps. Selection uses schema 2.
 The stage rejects mismatched goal sets, audio duration, audio source, and video frame counts.
@@ -283,7 +284,7 @@ The existing FINAL audio cue plays during the card. Every card stops at the Reca
 The stage flags a late card that overlaps FINAL. Review that closing timeline before publishing the Recap.
 This stage does not change audio cue timing or extend the Recap.
 
-The Short and single-goal paths use the same whistle mapper. Their existing text overlay waits for confirmation and fits complete names.
+The Short and single-goal paths confirm their kept audio before rendering graphics. Their text overlay waits for confirmation and fits complete names.
 This port does not replace that older Short overlay with the regional Remotion layout.
 
 Remotion renders at twice the output dimensions. ffmpeg downsamples with Lanczos filtering.

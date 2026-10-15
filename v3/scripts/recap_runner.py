@@ -830,7 +830,8 @@ def _fp_short(ctx):
             "files": [file_identity(p) for p in camera_files(root)], "options": short_options(ctx),
             "manifest": _file_hash(manifest), "media": media, "rife_ready": rife_ready(),
             "scripts": {name: _file_hash(HERE / name) for name in
-                         ("short_clips.py", "game_data.py", "recap_assembly.py", "audio_mix.py", "cue_library.py", "recap_graphics.py", "selection.py")}}
+                          ("short_clips.py", "game_data.py", "recap_assembly.py", "audio_mix.py", "whistle_presentation.py",
+                           "audio_signals.py", "cue_library.py", "recap_graphics.py", "selection.py")}}
 
 
 def _run_short(ctx):

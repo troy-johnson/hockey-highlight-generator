@@ -301,7 +301,8 @@ def bind_short_whistles(plan: dict, selection: dict, signals: dict) -> None:
         if entry["kind"] == "final":
             continue
         when = confirmed.get(entry["goal_id"])
-        entry["confirmation_out"] = None if when is None or entry["kind"] == "hook" else when + hook_seconds - cursor
+        entry["mapped_confirmation_out"] = None if when is None or entry["kind"] == "hook" else when + hook_seconds - cursor
+        entry["confirmation_out"] = None
         if when is None and entry["kind"] in ("goal", "penalty"):
             plan["flags"].append(f"{entry['goal_id']}: whistle unavailable; event caption and score change held")
         cursor += entry["frames"] / FPS
@@ -310,6 +311,35 @@ def bind_short_whistles(plan: dict, selection: dict, signals: dict) -> None:
 def _text(frame, text, x, y, scale=1., color=(245, 245, 245)):
     import cv2
     cv2.putText(frame, str(text), (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2, cv2.LINE_AA)
+
+
+def confirm_short_audio(plan: dict, rink) -> None:
+    """Confirm the kept-camera whistle before rendering the Short's graphics."""
+    from audio_mix import SR
+    from whistle_presentation import confirm_presentations
+    sequence = short_sequence(plan)
+    if not any("mapped_confirmation_out" in e for e in sequence):
+        return
+    timeline, cursor = [], 0.
+    for entry in sequence:
+        duration = entry["frames"] / FPS
+        if entry["kind"] != "final":
+            event = dict(entry, out_start=cursor, out_dur=duration)
+            if entry["kind"] == "penalty":
+                event.update(kind="play", play_kind="penalty")
+            mapped = entry.get("mapped_confirmation_out")
+            event["confirmation_out"] = None if mapped is None else cursor + mapped
+            timeline.append(event)
+        cursor += duration
+    records = confirm_presentations(timeline, rink, SR)
+    plan["presentation_whistles"] = records
+    confirmed = {r["goal_id"]: r["onset_t"] for r in records}
+    cursor = 0.
+    for entry in sequence:
+        when = confirmed.get(entry.get("goal_id"))
+        if entry["kind"] != "final":
+            entry["confirmation_out"] = None if when is None or entry["kind"] == "hook" else when - cursor
+        cursor += entry["frames"] / FPS
 
 
 def _fit_text(frame, text, x, y, width, scale=1.):
@@ -517,6 +547,7 @@ def prepare_audio(plan: dict, bed: dict | None, spans: list[dict], *, cues=None)
             except RuntimeError as exc:
                 flags.append(f"{entry['goal_id']}: rink audio unavailable: {exc}")
         position += length
+    confirm_short_audio(plan, rink)
     events = list(cues or [])
     cursor = 0.
     for entry in short_sequence(plan):
@@ -536,10 +567,11 @@ def prepare_audio(plan: dict, bed: dict | None, spans: list[dict], *, cues=None)
                     "duck_events": [{k: e[k] for k in ("t", "dur_s") if k in e} for e in events]}
 
 
-def mix_short(plan: dict, video: Path, output: Path, bed: dict | None, spans: list[dict], *, cues=None) -> dict:
+def mix_short(plan: dict, video: Path, output: Path, bed: dict | None, spans: list[dict], *, cues=None,
+              prepared=None) -> dict:
     """Use measured two-pass loudnorm and check the encoded AAC track."""
     from audio_mix import SR, _measure_loudness, _probe_duration
-    master, report = prepare_audio(plan, bed, spans, cues=cues)
+    master, report = prepared if prepared is not None else prepare_audio(plan, bed, spans, cues=cues)
     with tempfile.TemporaryDirectory(prefix="short-mix-", dir=Path(output).parent) as scratch:
         raw = Path(scratch) / "audio.f32"
         master.astype("float32").tofile(raw)
@@ -652,8 +684,9 @@ def main(argv=None) -> int:
         with tempfile.TemporaryDirectory(prefix="short-output-", dir=root) as scratch:
             for name, output_plan in outputs:
                 video = Path(scratch) / "plain.mp4"
+                prepared = prepare_audio(output_plan, bed, spans)
                 render_short(output_plan, video)
-                reports.append(mix_short(output_plan, video, Path(scratch) / name, bed, spans))
+                reports.append(mix_short(output_plan, video, Path(scratch) / name, bed, spans, prepared=prepared))
             for name, _ in outputs:
                 (Path(scratch) / name).replace(root / name)
         plan["outputs"] = [name for name, _ in outputs]

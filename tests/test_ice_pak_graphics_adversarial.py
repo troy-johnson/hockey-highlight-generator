@@ -48,7 +48,9 @@ def props_for(tmp_path, fixture, whistle, *, cue_delay=0):
         if cue["cue"] == "sfx_goal_card":
             cue["t"] += cue_delay
     audio = {"output": "synthetic_Recap_audio.mp4", "video": plan["output"],
-             "duration_s": plan["duration_s"], "cues": cues}
+              "duration_s": plan["duration_s"], "cues": cues}
+    from test_recap_graphics import acoustic_proofs
+    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
     return rg.write_props(tmp_path, sheet, selection, plan, audio, options, publish=False,
                           coverage={"periods": selection["periods"]}, audio_signals=signals)
 
@@ -156,3 +158,107 @@ def test_game_sound_keeps_mastered_opening_gain_when_output_peak_is_safe(tmp_pat
     assert report["mode"] == "game_sound"
     assert len(encode_filters) == 1, encode_filters
     assert "volume=" not in encode_filters[0]
+
+
+def _adversarial_whistle_audio(duration, onset, sr=am.SR):
+    """Keep synthetic whistle samples entirely in memory."""
+    mono = np.zeros(round(duration * sr), dtype=np.float32)
+    if onset is not None:
+        first = round(onset * sr)
+        length = min(round(.6 * sr), len(mono) - first)
+        mono[first:first + length] = .2 * np.sin(2 * np.pi * 2200 * np.arange(length) / sr)
+    return np.column_stack([mono, mono])
+
+
+@pytest.mark.parametrize("kept_onset", [None, 7.35], ids=["silent-camera", "later-kept-camera-whistle"])
+def test_short_requires_kept_audio_confirmation_not_only_merged_timestamp(
+        tmp_path, monkeypatch, frozen_game, kept_onset):
+    """Short must not retain the merged timestamp that Recap now rejects."""
+    from whistle_presentation import whistle_onset
+
+    sheet, _, selection, original = frozen_game
+    live = dict(original["clips"][0], camera="cam1", caption="GOAL " + rg.goal_data(sheet, "home:1")["scorer"],
+                score_before=[0, 0], score=[1, 0],
+                parts=[{"file": str(tmp_path / "camera.mp4"), "seek_s": 10, "duration_s": 10}])
+    replay = dict(original["replays"][0], kind="replay", camera="cam1", score_before=[0, 0], score=[1, 0],
+                  parts=[{"file": str(tmp_path / "camera.mp4"), "seek_s": 14, "duration_s": 10}])
+    plan = {"opening": [], "clips": [live], "replays": [replay], "flags": [], "duration_s": 25,
+            "teams": sheet["teams"], "final": dict(rg.final_data(sheet, []), kind="final", frames=150)}
+    source = _adversarial_whistle_audio(10, kept_onset)
+    measured = whistle_onset(source, am.SR, 7.011, 10)
+    assert measured is None if kept_onset is None else measured >= kept_onset
+    short.bind_short_whistles(plan, selection, {"whistles": [{"t": 17.011}]})
+    monkeypatch.setattr(am, "_entry_audio", lambda entry, windows: source.copy() if entry["kind"] == "goal"
+                        else np.zeros((round(entry["frames"] / 30 * am.SR), 2), dtype=np.float32))
+    short.prepare_audio(plan, None, [])
+    assert short.score_at(live, 211 / 30) == [0, 0], (
+        "Short announces at the unverified merged time", live["confirmation_out"], measured)
+    if kept_onset is None:
+        assert short.score_at(replay, 0) == [0, 0]
+
+
+def test_graphics_reject_acoustic_proof_from_another_kept_camera(tmp_path, frozen_game):
+    """Equal output timestamps do not prove that the same source audio was checked."""
+    from whistle_presentation import confirm_presentations
+
+    sheet, options, selection, plan = frozen_game
+    signals = {"whistles": [{"t": 17.011, "cameras": ["cam1", "cam2"]}]}
+    for entry in plan["clips"] + plan["replays"]:
+        entry.update(camera="cam1", parts=[{"file": str(tmp_path / "cam1.mp4"),
+                                          "seek_s": entry["start_s"], "duration_s": 10}])
+    timeline = am.build_timeline(plan, selection=selection, audio_signals=signals)
+    proof = confirm_presentations(timeline, _adversarial_whistle_audio(25, 7.35), am.SR)
+    assert proof[0]["onset_t"] > 7.35
+    audio = {"output": "synthetic_Recap_audio.mp4", "video": plan["output"], "duration_s": 25,
+             "presentation_whistles": proof, "cues": am.plan_cues(timeline, duration_s=25)}
+    # A different camera can have a later audible whistle at the same merged event time.
+    for entry in plan["clips"] + plan["replays"]:
+        entry["camera"] = "cam2"
+        entry["parts"][0]["file"] = str(tmp_path / "cam2.mp4")
+    with pytest.raises(ValueError, match="proof|rerun mix"):
+        rg.write_props(tmp_path, sheet, selection, plan, audio, options, publish=False,
+                       coverage={"periods": selection["periods"]}, audio_signals=signals)
+
+
+def test_production_graphics_cannot_announce_without_acoustic_proof(tmp_path, monkeypatch, frozen_game):
+    """An older mix report must not silently bypass the new kept-audio requirement."""
+    _, options, selection, plan = frozen_game
+    root = tmp_path / "game"
+    root.mkdir()
+    (root / "game_data.json").write_text((tmp_path / "game_data.json").read_text())
+    signals = {"whistles": [{"t": 17.011}]}
+    timeline = am.build_timeline(plan, selection=selection, audio_signals=signals)
+    audio = {"output": "synthetic_Recap_audio.mp4", "video": plan["output"], "duration_s": 25,
+             "cues": am.plan_cues(timeline, duration_s=25)}
+    for name, value in {"selection.json": selection, "recap_assembly.json": plan,
+                        "recap_audio.json": audio, "coverage.json": {"periods": selection["periods"]},
+                        "audio_signals.json": signals}.items():
+        (root / name).write_text(json.dumps(value))
+    monkeypatch.setattr(rg, "probe_video", lambda *args: {"width": 1920, "height": 1080})
+    result = rg.main([str(root), "--options", json.dumps(options), "--props-only",
+                      "--workspace", str(tmp_path / "workspace")])
+    if result:
+        assert result == 1
+        assert not (root / rg.PROPS_FILE).exists()
+    else:
+        props = json.loads((root / rg.PROPS_FILE).read_text())
+        assert not any(e["kind"] in ("goal", "penalty", "event_bar") for e in props["events"]), (
+            "Production graphics announced a whistle without acoustic proof", props["events"])
+
+
+def test_acoustic_delay_past_live_cut_is_checked_in_the_bound_replay(tmp_path, frozen_game):
+    """A small source-time delay can become a large output delay across a Replay cut."""
+    from whistle_presentation import confirm_presentations
+
+    _, _, selection, plan = frozen_game
+    plan["clips"][0].update(end_s=17.1, frames=213)
+    plan["replays"][0].update(start_s=14, end_s=20, speed=.5, frames=360)
+    plan["duration_s"] = (213 + 360 + 150) / 30
+    timeline = am.build_timeline(plan, selection=selection, audio_signals={"whistles": [{"t": 17.0}]})
+    assert timeline[0]["confirmation_out"] == 7
+    # The kept camera's whistle is 0.3 seconds later, outside live but inside this Replay.
+    audible = 213 / 30 + (17.3 - 14) / .5
+    proof = confirm_presentations(timeline, _adversarial_whistle_audio(plan["duration_s"], audible), am.SR)
+    onset = proof[0]["onset_t"]
+    assert onset is not None and audible <= onset < audible + .2, (
+        "The output-only search missed the bound whistle retained by Replay", proof, audible)

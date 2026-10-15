@@ -8,7 +8,7 @@ import pytest
 
 import audio_mix as am
 import recap_graphics as rg
-from test_recap_graphics import game
+from test_recap_graphics import acoustic_proofs, game
 
 
 def inputs():
@@ -19,6 +19,7 @@ def inputs():
     signals = {"whistles": [{"t": 17.011}, {"t": 127}, {"t": 36.025}]}
     timeline = am.build_timeline(plan, selection=selection, audio_signals=signals)
     audio["cues"] = am.plan_cues(timeline, duration_s=40)
+    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
     return sheet, selection, plan, audio, signals
 
 
@@ -75,6 +76,7 @@ def test_whistle_just_past_live_cut_keeps_old_score_until_next_frame(tmp_path):
     signals = {"whistles": [{"t": 20.02}]}
     timeline = am.build_timeline(plan, selection=selection, audio_signals=signals)
     audio["cues"] = am.plan_cues(timeline, duration_s=40)
+    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
     props = rg.write_props(tmp_path, sheet, selection, plan, audio, {}, audio_signals=signals)
     bugs = [e for e in props["events"] if e["kind"] == "scorebug"]
     assert [(e["startFrame"], e["durationFrames"], e["data"]["score"]) for e in bugs[:3]] == [
@@ -170,8 +172,8 @@ def test_graphics_use_kept_audio_onset_proof_not_merged_camera_start(tmp_path):
     for cue in audio["cues"]:
         if cue["cue"] == "sfx_goal_card" and cue["goal_id"] == "home:1":
             cue["t"] += .3
-    audio["presentation_whistles"] = [{"goal_id": "home:1", "mapped_t": 7.011,
-        "onset_t": 7.311, "method": METHOD}]
+    record = next(r for r in audio["presentation_whistles"] if r["goal_id"] == "home:1")
+    record["onset_t"] = 7.311
     # Other event cues have no acoustic proof and must not be accepted.
     audio["cues"] = [c for c in audio["cues"] if not c["cue"].startswith("sfx_") or c.get("goal_id") == "home:1"]
     props = rg.write_props(tmp_path, sheet, selection, plan, audio, {}, audio_signals=signals)
@@ -188,3 +190,31 @@ def test_stale_or_early_acoustic_proof_is_rejected(record):
     from whistle_presentation import verified_onset
     with pytest.raises(ValueError, match="rerun mix"):
         verified_onset({"presentation_whistles": [record]}, "home:1", 7)
+
+
+def test_missing_acoustic_proof_cannot_restore_merged_camera_timing():
+    from whistle_presentation import verified_onset
+    assert verified_onset({}, "home:1", 7.011) is None
+
+
+def test_acoustic_search_stops_at_the_exact_source_cut(monkeypatch):
+    import whistle_presentation as wp
+    called = []
+    def onset(audio, sample_rate, approximate, end, *, start_limit=0, look_after=1.5):
+        called.append((approximate, end, start_limit))
+        return None
+    monkeypatch.setattr(wp, "whistle_onset", onset)
+    live = {"goal_id": "home:1", "kind": "goal", "start_s": 10, "end_s": 11,
+            "speed": 1, "frames": 30, "out_start": 0, "out_dur": 1, "confirmation_out": .9, "parts": []}
+    replay = {**live, "kind": "tight", "start_s": 3, "end_s": 4, "out_start": 1}
+    wp.confirm_presentations([live, replay], np.zeros((am.SR * 2, 2)), am.SR)
+    assert len(called) == 1
+    assert called[0] == pytest.approx((.9, 1, .9))
+    assert live["confirmation_out"] is None
+
+
+def test_saved_whistle_proof_must_match_source_mapping(tmp_path):
+    sheet, selection, plan, audio, signals = inputs()
+    audio["presentation_whistles"][0]["piece"]["start_s"] += .5
+    with pytest.raises(ValueError, match="proof is stale"):
+        rg.write_props(tmp_path, sheet, selection, plan, audio, {}, audio_signals=signals)

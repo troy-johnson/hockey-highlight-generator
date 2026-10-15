@@ -278,7 +278,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
                            e["kind"] in ("goal", "play")), None)
             confirmation = source.get("confirmation_out") if source else None
             from whistle_presentation import verified_onset
-            confirmation = verified_onset(audio, cue.get("goal_id"), confirmation)
+            confirmation = verified_onset(audio, cue.get("goal_id"), confirmation, timeline=timeline)
             if confirmation is None or cue["t"] + 1e-8 < confirmation:
                 raise ValueError(f'{cue.get("goal_id")}: mix cue precedes a verified whistle; rerun mix')
             if cue["t"] > confirmation + 1e-8:
@@ -421,7 +421,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         if i + 1 < len(top_cards):
             end = min(end, top_cards[i + 1]["startFrame"] - 4)
         card["durationFrames"] = end - start
-        minimum = (14 if card["kind"] == "goal" else 12) + 75 + 10
+        minimum = 6 + 18 + 75 + 10
         if card["durationFrames"] < minimum:
             flags.append(f'{card["data"]["id"]}: insufficient readable time; {card["kind"]} rail omitted')
             card["durationFrames"] = 0

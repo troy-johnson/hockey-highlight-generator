@@ -34,6 +34,9 @@ Never use that tolerance to move the announcement before the actual whistle.
 The mix checks the bound whistle in kept-camera audio. It records an onset proof in `recap_audio.json`.
 This presentation check does not change Detection, Selection, or cuts. Missing acoustic confirmation omits the announcement.
 Graphics rejects an onset proof that no longer matches the source whistle.
+The proof identifies the exact source file, seek, speed, camera, and output piece.
+Search any retained Replay in source time, not by extending a window across an unrelated source cut.
+An older mix without this proof needs a mix rerun. It cannot restore an earlier merged-camera announcement.
 
 The event bar enters at the whistle frame. The matching card starts its entry six frames later.
 Keep score and period animation origins across adjacent clips, including a live-to-Replay handoff.
