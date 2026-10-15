@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import {Reflector} from 'three/addons/objects/Reflector.js';
 import {BladeCut, ContactShadow, IceBloom, IceSpray, openingMotion, SnowFlurries} from './StingerEffects.jsx';
 import {FrostPane} from './FrostPane.jsx';
+import {RegionalMatchup} from './IcePakGraphics';
 
 const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'};
 const fontCss = `@font-face {font-family: Inter; src: url('${staticFile('Inter.ttf')}'); font-weight: 100 900;}`;
@@ -389,16 +390,10 @@ export function Stinger({data, teams, tokens, duration, wipe = false}) {
 // The matchup rail alone, over a pre-rendered opening and the first play (spec 003).
 // Its local frame 0 is the rail's first rise frame; it exits over its last 10 frames.
 export function OpeningRail({data, teams, tokens, duration}) {
-  const frame = useCurrentFrame();
   const {width, height} = useVideoConfig();
-  const team = data.team ? teams[data.team] : null;
-  const opponent = teams[data.team === 'away' ? 'home' : 'away'];
-  const out = [duration - 10, duration - 1];
-  return <AbsoluteFill style={{zIndex: 30, pointerEvents: 'none', opacity: interpolate(frame, out, [1, 0], clamp),
-    transform: `translateY(${interpolate(frame, out, [0, 30], {...clamp, easing: Easing.in(Easing.cubic)})}px)`}}>
+  return <AbsoluteFill style={{zIndex: 30, pointerEvents: 'none'}}>
     <style>{fontCss}</style>
-    <MatchupRail data={data} teams={teams} team={team} opponent={opponent} f={frame + 62}
-      vertical={height > width} accent={tokens?.accent}/>
+    <RegionalMatchup data={data} teams={teams} duration={duration} vertical={height > width}/>
   </AbsoluteFill>;
 }
 

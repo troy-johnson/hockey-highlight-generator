@@ -1,4 +1,4 @@
-"""Write Remotion props and overlay Ice Pak Slab graphics on the mixed Recap."""
+"""Write frozen presentation data and overlay the approved Ice Pak graphics."""
 from __future__ import annotations
 
 import argparse
@@ -66,10 +66,7 @@ MAX_FINAL_SKATERS = 10  # FINAL lists the top skaters per team, not the full ros
 
 def final_data(sheet: dict, flags: list) -> dict:
     if "_final" in sheet:
-        data = copy.deepcopy(sheet["_final"])
-        for table in data["table"].values():
-            table["skaters"] = table["skaters"][:MAX_FINAL_SKATERS]
-        return data
+        return copy.deepcopy(sheet["_final"])
     tables = {}
     for side in ("home", "away"):
         rows = {}
@@ -253,7 +250,8 @@ def team_theme(root: Path, sheet: dict, options: dict, flags: list,
 
 
 def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dict, options: dict,
-                *, publish: bool = True, assets_dir: Path | None = None) -> dict:
+                *, publish: bool = True, assets_dir: Path | None = None,
+                coverage: dict | None = None, audio_signals: dict | None = None) -> dict:
     fps = int(plan.get("fps") or 30)
     if fps != 30:
         raise ValueError("graphics require the 30 fps Recap timeline")
@@ -266,7 +264,21 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
     if audio["video"] != plan["output"]:
         raise ValueError("audio source does not match the assembly plan")
     events, flags = [], list(sheet.get("flags") or [])
-    timeline = build_timeline(plan)
+    periods = coverage.get("periods", []) if coverage is not None else selection.get("periods") or []
+    if coverage is not None and not periods:
+        raise ValueError("coverage.json has no periods; confirm coverage before graphics")
+    timeline = build_timeline(plan, selection=selection if audio_signals is not None else None,
+                              audio_signals=audio_signals)
+    audio = copy.deepcopy(audio)
+    if audio_signals is not None:
+        for cue in audio.get("cues", []):
+            if cue["cue"] not in ("sfx_goal_card", "sfx_penalty_card"):
+                continue
+            source = next((e for e in timeline if e.get("goal_id") == cue.get("goal_id") and
+                           e["kind"] in ("goal", "play")), None)
+            confirmation = source.get("confirmation_out") if source else None
+            if confirmation is None or cue["t"] + 1e-8 < confirmation:
+                raise ValueError(f'{cue.get("goal_id")}: mix cue precedes a verified whistle; rerun mix')
     frame_cursor = 0
     for entry in timeline:
         entry["frame_start"] = frame_cursor
@@ -304,7 +316,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         gid = e["goal_id"]
         start, end = e["frame_start"], e["frame_end"]
         moment = e.get("moment_s", live[gid]["moment_s"])
-        period = period_of(moment, selection.get("periods") or [])
+        period = period_of(moment, periods)
         def bug(a, b, score):
             if b > a:
                 score = [max(old, new) for old, new in zip(last_score, score)]
@@ -314,19 +326,24 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         if e["kind"] == "goal":
             confirmation = next((c["t"] for c in audio.get("cues", [])
                                  if c["cue"] == "sfx_goal_card" and c.get("goal_id") == gid), None)
-            # No confirmation: no announcement, but the verified goal still counts from its
-            # moment in the footage (spec 003, goal and decision states, rule 4).
-            when = confirmation if confirmation is not None else e.get("moment_out")
-            change = end if when is None else max(start, min(end, round(when * fps)))
+            # A kept goal waits for its whistle. Unknown timing cannot announce a score.
+            when = confirmation
+            change = end if when is None else max(start, min(end, math.ceil(when * fps - 1e-8)))
+            if when is None:
+                flags.append(f"{gid}: whistle unavailable; score held until the next chronological play")
             bug(start, change, score_before(gid))
             bug(change, end, score_before(gid, True))
         else:
             if gid in goal_order:
-                score = score_before(gid, True)
+                confirmation = next((c["t"] for c in audio.get("cues", [])
+                                     if c["cue"] == "sfx_goal_card" and c.get("goal_id") == gid), None)
+                change = end if confirmation is None else max(start, min(end, math.ceil(confirmation * fps - 1e-8)))
+                bug(start, change, score_before(gid))
+                bug(change, end, score_before(gid, True))
             else:
                 score = [sum(g.startswith(s + ":") and moments.get(g) is not None
-                              and moments[g] <= moment for g in goal_order) for s in ("home", "away")]
-            bug(start, end, score)
+                               and moments[g] <= moment for g in goal_order) for s in ("home", "away")]
+                bug(start, end, score)
             # A replay shot (a goal's, or the best non-goal play's) carries its shot kind, not "play".
             if e["kind"] != "play":
                 events.append({"kind": "replay", "startFrame": start, "durationFrames": end - start, "data": {}})
@@ -335,7 +352,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
             continue
         if not math.isfinite(cue["t"]) or cue["t"] < 0 or round(cue["t"] * fps) >= frames:
             raise ValueError("graphics cue is outside the Recap timeline")
-        start = round(cue["t"] * fps)
+        start = math.ceil(cue["t"] * fps - 1e-8)
         if cue["cue"] == "sfx_goal_card":
             events.append({"kind": "goal", "startFrame": start,
                            "durationFrames": min(4 * fps, frames - start),
@@ -355,15 +372,18 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
                             "data": {"id": gid, "team": side, "num": "" if row.get("team_only") else player_number(sheet, side, num),
                                      "name": sheet["teams"][side] if row.get("team_only") else player_name(sheet, side, num),
                                      "minutes": row.get("minutes") if row.get("minutes") is not None else "?",
-                                     "infraction": row.get("infraction") or "PENALTY"}})
+                                      "infraction": row.get("infraction") or "PENALTY"}})
+            if row.get("classification"):
+                events[-1]["data"]["classification"] = row["classification"]
+            if row.get("additional"):
+                events[-1]["data"]["additional"] = row["additional"]
         elif cue["cue"] == "sfx_period_wipe":
             boundaries = []
             previous_period = None
             for entry in timeline:
                 if entry["kind"] in ("cold_open", "stinger", "final"):
                     continue
-                period = period_of(entry.get("moment_s", live[entry["goal_id"]]["moment_s"]),
-                                   selection.get("periods") or [])
+                period = period_of(entry.get("moment_s", live[entry["goal_id"]]["moment_s"]), periods)
                 if previous_period is not None and period != previous_period:
                     boundaries.append((entry["frame_start"], period, entry["frame_end"]))
                 previous_period = period
@@ -394,10 +414,11 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
     for i, card in enumerate(top_cards):
         start = card["startFrame"]
         # A late GOAL card can continue into that goal's replay, not the next play.
-        matching = ([e for e in timeline if e.get("goal_id") == card["data"]["id"]]
-                    if card["kind"] == "goal" else
-                    [e for e in timeline if round(e["out_start"] * fps) <= start <
-                     round((e["out_start"] + e["out_dur"]) * fps)])
+        matching = [e for e in timeline if e.get("goal_id") == card["data"]["id"]]
+        if not any(e["frame_start"] <= start < e["frame_end"] for e in matching):
+            flags.append(f'{card["data"]["id"]}: cue is outside its source play; rail omitted')
+            card["durationFrames"] = 0
+            continue
         clip_end = max(round((e["out_start"] + e["out_dur"]) * fps) for e in matching)
         end = min(start + card["durationFrames"], clip_end)
         if i + 1 < len(top_cards):
@@ -411,6 +432,11 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         if any(e["startFrame"] + e["durationFrames"] > final["startFrame"] for e in top_cards):
             flags.append("FINAL overlaps a late card; review the closing timeline")
     events = [e for e in events if e["durationFrames"] > 0]
+    for card in top_cards:
+        if card["durationFrames"] > 0:
+            events.append({"kind": "event_bar", "startFrame": card["startFrame"],
+                           "durationFrames": min(70, card["durationFrames"]),
+                           "data": {"team": card["data"]["team"], "label": card["kind"].upper()}})
     for card in [e for e in events if e["kind"] == "period"]:
         if any(e["kind"] in ("goal", "penalty") and
                card["startFrame"] < e["startFrame"] + e["durationFrames"] + 4 and
@@ -450,7 +476,8 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         duration = stinger["frames"] if stinger is not None else min(75, frames - start_frame)
         if stinger is not None and start_frame != round(stinger["out_start"] * fps):
             raise ValueError("open stinger does not match game_start audio cue; rerun mix")
-        data = {"team": props["focusSide"], "date": options.get("date") or sheet.get("date")}
+        data = {"team": props["focusSide"] if props["perspective"] == "focus" else None,
+                "date": sheet.get("date")}
         video = (stinger or {}).get("opening_video")
         if video:
             # The opening is in the video; only the matchup rail is drawn. It enters over
@@ -482,6 +509,12 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         elif goal in uncertain_clocks:
             props["flags"].append(f"{goal['id']}: sheet clock unavailable; score order uses camera timing")
     table = final_data(sheet, [])["table"]
+    for event in props["events"]:
+        if event["kind"] == "final":
+            event["data"]["date"] = sheet.get("date")
+            pages = max(1, *(math.ceil(len(t["skaters"]) / 10) for t in event["data"]["table"].values()))
+            if event["durationFrames"] < pages * 150:
+                raise ValueError(f"FINAL needs at least {pages * 150} frames for all verified statistics")
     for side in ("home", "away"):
         if not any(g["saves"] is not None for g in table[side]["goalies"]):
             props["flags"].append(f"{side}: goalie saves unavailable in game_sheet.json")
@@ -526,6 +559,8 @@ def main(argv=None) -> int:
         options = json.loads(args.options)
         from game_data import load_graphics_inputs
         sheet, options = load_graphics_inputs(root, options)
+        coverage = json.loads((root / "coverage.json").read_text())
+        signals = json.loads((root / "audio_signals.json").read_text())
         if not plan.get("clips"):
             raise ValueError("recap_assembly.json has no clips")
         key = hashlib.sha256(str(root).encode()).hexdigest()[:20]
@@ -534,7 +569,7 @@ def main(argv=None) -> int:
             raise ValueError("graphics workspace must be outside the game folder")
         (scratch / "public").mkdir(parents=True, exist_ok=True)
         props = write_props(root, sheet, selection, plan, audio, options, publish=False,
-                            assets_dir=scratch / "public")
+                            assets_dir=scratch / "public", coverage=coverage, audio_signals=signals)
         video = root / audio["output"]
         stream = probe_video(video, props)
         props.update(width=int(stream["width"]), height=int(stream["height"]))

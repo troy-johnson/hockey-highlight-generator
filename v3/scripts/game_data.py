@@ -209,8 +209,11 @@ def graphics_inputs(data: dict, options: dict) -> tuple[dict, dict]:
                 rows.append({"scorer" if kind == "goal" else "player": player(event["person"]),
                              "assists": [player(p) for p in event.get("assists", [])],
                              "per": str(event["period"] or ""), "time": event.get("clock"),
-                             "type": event.get("type"), "minutes": event.get("minutes"),
-                             "infraction": event.get("infraction"), "team_only": event["person"] is None})
+                              "type": event.get("type"), "minutes": event.get("minutes"),
+                              "infraction": event.get("infraction"), "classification": event.get("classification"),
+                              "additional": [{"classification": child.get("classification"), "minutes": child.get("minutes")}
+                                             for child in data["events"] if child.get("parent_event_id") == event["id"]],
+                              "team_only": event["person"] is None})
             sheet[target][side] = rows
         sheet["goalkeeping"][side] = [{**r, "player": player(r["person"]), "name": r["person"]["name"]}
                                          for r in (data.get("sheet", {}).get("goalkeeping") or {}).get(tid, [])]

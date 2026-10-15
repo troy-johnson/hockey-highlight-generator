@@ -1,17 +1,18 @@
 import React from 'react';
 import {AbsoluteFill, Easing, Img, staticFile, useCurrentFrame} from 'remotion';
+import {fit as fitText, glow, RegionalResult} from './IcePakGraphics';
 
 // Black Ice FINAL: the result plate first, then the verified statistics.
 const ice = '#EEF3F6';
 const frost = '#9FB2C1';
 const cyan = '#7FD3F0';
 const clamp = v => Math.max(0, Math.min(1, v));
-const out = Easing.out(Easing.cubic);
+const out = Easing.inOut(Easing.cubic);
 const inOut = Easing.inOut(Easing.cubic);
 const fmt = v => v == null ? '—' : Number.isFinite(v) && Number.isInteger(v) ? v : Number.isFinite(v) ? Number(v.toFixed(2)) : v;  // 2:15 PIM shows 2.25, not 2.3 (spec 003)
 const STATS = [['g', 'G'], ['a', 'A'], ['pts', 'PTS'], ['pim', 'PIM']];
 // Shrink text to fit its width instead of clipping it (about .58 em per character).
-const fit = (text, base, width) => Math.min(base, width / (Math.max(1, String(text ?? '').length) * .58));
+const fit = fitText;
 
 const Crest = ({team, size}) => team.logo ? <Img src={staticFile(team.logo)}
   style={{width: size, height: size, objectFit: 'contain', flexShrink: 0}}/> : null;
@@ -47,38 +48,39 @@ const Plate = ({data, teams, vertical, accent}) => {
 
 const Table = ({team, table, width, maxRows, start}) => {
   const f = useCurrentFrame();
-  // A column with no values is empty; PIM that is zero for everyone means no penalties.
-  const stats = STATS.filter(([key]) => table.skaters.some(p => p[key] != null &&
-    (key !== 'pim' || p[key] !== 0)));
-  const h = Math.max(20, Math.min(50, (maxRows - 52) / Math.max(1, table.skaters.length)));
-  const nameWidth = width - 64 - 18 - 12 - stats.length * 70;
-  const cell = {width: 70, textAlign: 'center', flexShrink: 0, fontVariantNumeric: 'tabular-nums'};
+  // Zero PIM is a recorded value. Both teams use the approved common grid.
+  const stats = STATS.filter(([key]) => table.skaters.some(p => p[key] != null));
+  const h = Math.max(20, Math.min(50, (maxRows - 54) / Math.max(1, table.skaters.length)));
+  const nameWidth = width - 64 - 16 - 16 - stats.length * 72;
+  const cell = {width: 72, textAlign: 'center', flexShrink: 0, fontVariantNumeric: 'tabular-nums'};
   // Long rosters keep the whole reveal inside about one second.
   const step = Math.min(3, 30 / Math.max(1, table.skaters.length));
   const reveal = i => {
     const k = out(clamp((f - start - i * step) / 10));
-    return {opacity: k, transform: `translateY(${(1 - k) * 10}px)`};
+    return {opacity: k, transform: `translateX(${(1 - k) * -40}px)`};
   };
   const line = (key, i, num, name, values, bold) => <div key={key} style={{display: 'flex',
-    alignItems: 'center', height: h, background: i % 2 ? '#151C24' : '#19212A', ...reveal(i + 1)}}>
+    alignItems: 'center', height: h, paddingRight: 16, background: i % 2 ? '#151C24' : '#19212A', ...reveal(i + 1)}}>
     <div style={{width: 64, alignSelf: 'stretch', display: 'flex', alignItems: 'center',
       justifyContent: 'center', background: '#232B34',
-      fontSize: h * .5, fontWeight: 750}}>{num}</div>
-    <div style={{flex: 1, minWidth: 0, paddingLeft: 18, fontSize: fit(name, Math.min(25, h * .52), nameWidth),
+      fontSize: Math.min(21, h * .5), fontWeight: 750}}>{num && num !== '?' ? `#${String(num).replace(/^#/, '')}` : num}</div>
+    <div style={{flex: 1, minWidth: 0, paddingLeft: 16, fontSize: fit(name, Math.min(24, h * .52), nameWidth),
       fontWeight: 600, whiteSpace: 'nowrap'}}>{name}</div>
-    {values.map((v, j) => <div key={j} style={{...cell, fontSize: Math.min(25, h * .52),
+    {values.map((v, j) => <div key={j} style={{...cell, fontSize: Math.min(23, h * .52),
       fontWeight: bold === j ? 800 : 500, color: bold === j ? ice : '#C9D4DC'}}>{fmt(v)}</div>)}
-    <div style={{width: 12}}/>
   </div>;
   const ptsIndex = stats.findIndex(([key]) => key === 'pts');
   return <div style={{width}}>
-    <div style={{display: 'flex', alignItems: 'center', height: 52, gap: 12, paddingLeft: 14,
-      background: '#0E1319', borderBottom: `3px solid ${team.line ?? team.primary}`, ...reveal(0)}}>
-      <Crest team={team} size={34}/>
-      <span style={{flex: 1, fontSize: fit(team.name, 22, width - 74 - stats.length * 70 - 30),
-        fontWeight: 750, letterSpacing: 1.5, whiteSpace: 'nowrap'}}>{team.name.toUpperCase()}</span>
-      {stats.map(([, label]) => <div key={label} style={{...cell, fontSize: 16, fontWeight: 700,
-        letterSpacing: 2, color: frost}}>{label}</div>)}<div style={{width: 12}}/>
+    <div style={{display: 'flex', alignItems: 'center', height: 54, paddingRight: 16, position: 'relative',
+      background: glow(team, 60), ...reveal(0)}}>
+      <div style={{width: 64, height: 54, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#232B34', flexShrink: 0}}><Crest team={team} size={36}/></div>
+      <span style={{flex: 1, minWidth: 0, paddingLeft: 16, fontSize: fit(team.name.toUpperCase(), 19, nameWidth, 3),
+        fontWeight: 800, letterSpacing: 3, whiteSpace: 'nowrap'}}>{team.name.toUpperCase()}</span>
+      {stats.map(([, label]) => <div key={label} style={{...cell, fontSize: 15, fontWeight: 800,
+        letterSpacing: 2, color: frost}}>{label}</div>)}
+      <div style={{position: 'absolute', bottom: 0, left: 0, width: `${out(clamp((f - start - 4) / 30)) * 100}%`,
+        height: 3, background: team.secondary}}/>
     </div>
     {table.skaters.map((p, i) => line(`s-${p.num}-${i}`, i, p.num, p.name,
       stats.map(([key]) => p[key]), ptsIndex))}
@@ -140,6 +142,10 @@ const GoalieTable = ({rows, width, start, accent}) => {
 
 export const FinalCard = ({data, teams, tokens, duration, vertical}) => {
   const f = useCurrentFrame();
+  const pages = Math.max(1, ...['home', 'away'].map(s => Math.ceil((data.table?.[s]?.skaters.length || 0) / 10)));
+  const page = Math.min(pages - 1, Math.floor(f / (duration / pages)));
+  data = {...data, table: Object.fromEntries(['home', 'away'].map(s => [s,
+    {...data.table?.[s], skaters: (data.table?.[s]?.skaters || []).slice(page * 10, (page + 1) * 10)}]))};
   const accent = tokens?.accent ?? cyan;
   const W = vertical ? 1080 : 1920;
   const H = vertical ? 1920 : 1080;
@@ -152,24 +158,19 @@ export const FinalCard = ({data, teams, tokens, duration, vertical}) => {
   const any = sides.length || goalies.length;
   const enter = out(clamp(f / 14));
   const lift = any ? inOut(clamp((f - 30) / 16)) : 0;
-  const leave = 1 - clamp((f - (duration - 10)) / 10);
-  const plateH = vertical ? 112 : 132;
-  const centre = (H - plateH) / 2;
-  const top = vertical ? 300 : 120;
-  const plateTop = centre + (top - centre) * lift + (1 - enter) * 24;
-  const tableTop = top + plateH + (vertical ? 48 : 40);
-  const tableWidth = vertical ? 960 : sides.length === 2 ? 600 : 760;
+  const leave = 1 - inOut(clamp((f - (duration - 10)) / 10));
+  const tableTop = vertical ? 570 : 360;
+  const tableWidth = vertical ? 960 : 700;
   const goalieH = goalies.length ? 44 + goalies.length * 46 + (vertical ? 28 : 24) : 0;
   const space = (vertical ? 1760 : 1050) - tableTop - goalieH;
   const tallest = Math.max(1, ...sides.map(s => data.table[s]?.skaters?.length || 0));
   const skaterH = Math.min(space, 52 + tallest * 50);
   return <AbsoluteFill style={{zIndex: 30, opacity: leave, color: ice,
-    background: 'radial-gradient(ellipse at 50% 35%, #1B242D 0%, #0E1319 55%, #070B10 100%)'}}>
+    background: 'radial-gradient(ellipse at 50% 40%, #151C24 0%, #0A0D12 60%, #06080B 100%)'}}>
     <div style={{position: 'absolute', left: 0, right: 0, top: 0, height: 1,
       background: 'rgba(238,243,246,.18)'}}/>
-    <div style={{position: 'absolute', left: (W - (vertical ? 960 : 1240)) / 2, top: plateTop,
-      opacity: enter}}><Plate data={data} teams={teams} vertical={vertical} accent={accent}/></div>
-    {any && <div style={{position: 'absolute', top: tableTop, left: 0, width: W,
+    <RegionalResult data={data} teams={teams} frame={f} lift={lift} vertical={vertical}/>
+    {any && f >= 38 && <div style={{position: 'absolute', top: tableTop, left: 0, width: W,
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: vertical ? 28 : 24}}>
       {sides.length > 0 && <div style={{display: 'flex', flexDirection: vertical ? 'column' : 'row',
         alignItems: vertical ? 'center' : 'flex-start', gap: vertical ? 28 : 40}}>

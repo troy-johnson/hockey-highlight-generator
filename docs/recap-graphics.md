@@ -1,7 +1,7 @@
 # Recap graphics
 
-The `graphics` stage runs after `mix`. Python writes props from the Game Sheet and the assembly timeline.
-Remotion renders Variant D **Ice Pak Slab** graphics as ProRes 4444 clips with alpha.
+The `graphics` stage runs after `mix`. Python writes props from the frozen game data and the assembly timeline.
+Remotion renders the approved **Ice Pak regional** graphics as ProRes 4444 clips with alpha.
 ffmpeg downsamples the graphics and overlays them on the mixed Recap. It copies the mixed audio without encoding it again.
 
 ## Setup and commands
@@ -47,7 +47,9 @@ A preview manifest contains only that range. Do not use it as the full Recap ove
 
 ## Inputs and outputs
 
-The stage reads `game_sheet.json`, `selection.json`, `recap_assembly.json`, and `recap_audio.json`.
+The stage reads `game_data.json`, `coverage.json`, `audio_signals.json`, `selection.json`, `recap_assembly.json`, and `recap_audio.json`.
+Only the frozen snapshot supplies names, numbers, score, date, and statistics. A graphics-only rerun never refreshes a Roster.
+Coverage supplies periods. The stage checks presentation cues against the matched whistle and rejects an early cue.
 It reads the mixed video named by `recap_audio.json.output`.
 The assembly uses schema 3 at 30 fps. Selection uses schema 2.
 The stage rejects mismatched goal sets, audio duration, audio source, and video frame counts.
@@ -59,7 +61,7 @@ The stage writes:
 - `<assembly output stem>_graphics.mp4`: the Recap with graphics and mixed audio.
 - Local workspace: copied logos, alpha clips, diagnostic props, and `clips.ffconcat`.
 
-The runner fingerprints the input JSON, mixed video identity, Team Config, logos, and renderer sources.
+The runner fingerprints the input JSON, mixed video identity, frozen Team Config, logos, and renderer sources.
 It reruns graphics when these inputs change.
 The runner does not fingerprint installed tool versions. Use `rerun --from graphics` after a toolchain change.
 The stage checks the completed video's frame count before it publishes the video, props, and report.
@@ -118,7 +120,8 @@ The accent token is the Focus Team line. Without a Focus Team it stays ice cyan 
 The home and away tiles use their primary colors. Thin team lines (scorebug, rails, FINAL, matchup rail) and the frost-pane glow use the `line` colour.
 Only the period-plate score slab keeps a secondary-colour edge stripe.
 Semantic tokens stay consistent: white score and GOAL panels, navy state panels, black details, and blue labels.
-In focus perspective, an opponent GOAL uses a compact card. Neutral perspective uses equal cards.
+Focus perspective uses the Focus Team for transitions and the opening. Neutral perspective uses neutral transitions and equal team treatment.
+Both Perspectives retain both teams in the scorebug and FINAL. Black Ice is the package name, not a channel brand.
 
 ## Props contract: schemaVersion 1
 
@@ -154,6 +157,7 @@ Events appear in layer order: scorebug first, event cards next, FINAL last.
 | Event kind | Data fields |
 | --- | --- |
 | `scorebug` | `score`, `period` |
+| `event_bar` | `team`, `label` |
 | `goal` | `id`, `team`, `num`, `scorer`, `assists` (display strings), `type`, `period` |
 | `penalty` | `id`, `team`, `num`, `name`, `minutes`, `infraction` |
 | `period` | `score`, `period` |
@@ -167,8 +171,9 @@ A skater row has `num`, `name`, `g`, `a`, `pts`, and `pim`.
 `pim` is a number or `null`. Unreadable penalty minutes produce a flag and an em dash in FINAL.
 Numeric minutes, combined penalties such as `2+10`, and durations such as `2:30` contribute to PIM.
 A goalie row has `num`, `name`, and `saves`.
-Skaters with points or PIM appear in descending PTS, goals, and PIM order.
-FINAL includes both teams and every eligible row.
+Skaters keep the frozen snapshot order. Graphics does not sort tied rows again.
+FINAL includes both teams and every frozen row. More than ten rows use multiple pages, with at least 150 frames per page.
+Recorded zero PIM stays visible. A short closing section fails rather than silently dropping a row.
 
 ## 3D stingers
 
@@ -209,6 +214,14 @@ The rail rises from frame 95 of the opening, holds for 75 frames after the disso
 The rail ends at least 4 frames before the first information rail. A shortened rail produces a flag.
 The runner fingerprints the video, so a new render of it reruns the assembly.
 
+The approved v12 opening includes mastered sound. Set the kit's `opening` to that asset, not an older silent render.
+The asset stays outside git. The pipeline does not change the real database or Team Config to select it.
+The normal mix uses `audio.mode: game_sound` when an assembly contains a pre-rendered opening.
+It keeps source seeks and speed, lowers Replay sound by 8 dB, and applies 15 ms cut fades.
+It normalizes rink sound to -20 LUFS before adding the opening sound, then limits the output peak.
+PA music muting still applies. This mode adds no synthetic Bed, horn, or graphic sounds.
+Set `audio.mode: broadcast` to retain the Cue Library mix. Without a pre-rendered opening, broadcast remains the default.
+
 For an older assembly, explicit `start: stinger` compresses the opening motion into its first 75 frames.
 This fallback does not change audio or duration.
 An older assembly needs `rerun --from assembly` for a cold open or a reserved opening.
@@ -236,8 +249,8 @@ Set `durationFrames` to 135 for an opening or 30 for a wipe.
 
 Goal IDs use `home:1` or `away:1`, with a one-based Game Sheet row index.
 Penalty IDs use `penalty:home:1` or `penalty:away:1`.
-Player names come from the team roster. Missing names display as `#<jersey>`.
-FINAL derives G, A, PTS, and PIM from all Game Sheet rows, including goals omitted from the Recap.
+Player names and game numbers come from `game_data.json`. Missing names display as `#<jersey>`.
+FINAL reads frozen G, A, PTS, and PIM, including events omitted from the Recap.
 Goalie saves use this optional Game Sheet section:
 
 ```json
@@ -247,14 +260,18 @@ Goalie saves use this optional Game Sheet section:
 Zero saves is a valid value. Missing saves produce a flag and an unavailable label, not an invented number.
 The current Scoresheet reader does not supply this section. A reviewed Game Sheet can supply it.
 
-The scorebug changes at the live goal's output moment. Replays keep the post-goal score.
+The scorebug changes on the first output frame at or after the matched referee whistle.
+The event bar starts on that frame. The event card starts its entry six frames later.
+Adjacent clips retain the score roll's origin. Replay footage cannot trigger another score change.
+Without a matched whistle, the scorebug holds the old score through that goal's Replay and records a flag.
+The next chronological play can include that recorded goal. FINAL always uses the frozen score.
 All Selection goals count, including omitted goals. Their period and elapsed time define the scoring order.
 When a sheet clock is missing, known camera moments define the order and produce a review flag.
 The scorebug does not remove goals that it has already counted.
 For other plays, unmatched goals use the Selection window's expected camera time.
 The Selection field is `window.expected`. Missing timing produces a scorebug review flag; FINAL still counts that goal.
 
-GOAL and penalty cards start at their existing audio cues.
+GOAL and penalty cues must bind to a measured referee whistle. Graphics rejects a stale cue before that whistle.
 GOAL and penalty cards last up to four seconds. They stop at the source clip boundary or the next top card.
 Period cards follow the one-second wipe and last up to two seconds.
 FINAL starts five seconds before the Recap end, or earlier if its audio cue starts earlier.

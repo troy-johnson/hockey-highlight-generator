@@ -404,7 +404,8 @@ def test_mix_fingerprint_hashes_its_inputs(tmp_path):
         (tmp_path / name).write_text("{}" if not name.endswith(".mp4") else "x")
     fp = next(s for s in rr.STAGES if s.name == "mix").fingerprint(ctx)
     assert set(fp["inputs"]) == {"recap_assembly.json", "music_spans.json", "selection.json",
-                                 "game_sheet.json", "recap.mp4", "audio_signals.json", "play_review.json"}
+                                 "game_sheet.json", "recap.mp4", "audio_signals.json", "play_review.json",
+                                 "game_data.json", "coverage.json"}
     assert fp["options"] == rr.mix_options(ctx)
     assert "scripts" in fp
 

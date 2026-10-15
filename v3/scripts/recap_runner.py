@@ -709,7 +709,7 @@ def _fp_mix(ctx):
     video = _mix_plan_output(ctx)
     inputs: dict = {name: _file_hash(root / name) for name in
                     ("recap_assembly.json", "music_spans.json", "selection.json", "game_sheet.json",
-                     "audio_signals.json", "play_review.json")}
+                      "audio_signals.json", "coverage.json", "game_data.json", "play_review.json")}
     inputs[video] = file_identity(root / video)     # the plain Recap: identity, not a full hash
     return {"inputs": inputs,
             "manifest": file_identity(_mix_manifest_path(ctx)),
@@ -756,7 +756,8 @@ def _fp_graphics(ctx):
     root = ctx.game_folder
     video = _mix_outputs(ctx)[1]
     inputs: dict = {name: _file_hash(root / name) for name in
-              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_data.json", "play_review.json")}
+              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_data.json", "coverage.json",
+               "audio_signals.json", "play_review.json")}
     inputs[video] = file_identity(root / video)
     options = frozen_graphics_options(ctx)
     logos = {}

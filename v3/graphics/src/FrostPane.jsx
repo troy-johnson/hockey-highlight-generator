@@ -24,6 +24,32 @@ vec2 vor(vec2 p) { vec2 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
     if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
   return vec2(d1, d2); }
 float edgeFade(vec2 uv) { vec2 e = min(uv, 1.0 - uv); return smoothstep(0.0, 0.06, min(e.x, e.y)); }
+// Paired blade arcs and directional scuffs reproduce the approved skated pond.
+float arcMark(vec2 p, float seed, float W, float H) {
+  vec2 c = vec2(h21(vec2(seed, 1.3)) * W, h21(vec2(seed, 7.1)) * H);
+  float r = mix(180.0, 900.0, h21(vec2(seed, 3.7)));
+  float a0 = h21(vec2(seed, 5.9)) * 6.2832;
+  vec2 q = p - c - vec2(cos(a0), sin(a0)) * r;
+  float rr = length(q);
+  float twin = step(0.55, h21(vec2(seed, 6.6))) * mix(3.0, 7.0, h21(vec2(seed, 8.8)));
+  float d = min(abs(rr - r), twin > 0.0 ? abs(rr - r - twin) : 1e4);
+  float ang = mod(atan(q.y, q.x) - a0, 6.2832) - 3.1416;
+  float span = mix(0.35, 1.1, h21(vec2(seed, 9.2)));
+  float along = 1.0 - smoothstep(span * 0.6, span, abs(ang));
+  float w = mix(0.6, 2.4, pow(h21(vec2(seed, 2.4)), 2.0));
+  return (1.0 - smoothstep(0.0, w, d)) * along * mix(0.25, 1.0, h21(vec2(seed, 4.4)));
+}
+float skate(vec2 p, float W, float H) {
+  float m = 0.0;
+  for (int i = 0; i < 140; i++) m = m + arcMark(p, float(i) + 0.5, W, H) * (1.0 - m);
+  float sc = 0.0;
+  for (int k = 0; k < 3; k++) {
+    float a = 0.35 + float(k) * 1.1;
+    vec2 r = vec2(cos(a) * p.x + sin(a) * p.y, -sin(a) * p.x + cos(a) * p.y);
+    sc += smoothstep(0.86, 0.98, vnoise(vec2(r.x * 0.02, r.y * 0.55))) * 0.14;
+  }
+  return clamp(m + sc, 0.0, 1.0);
+}
 float inBox(vec2 uv, float m) { return step(-m, uv.x) * step(-m, uv.y) * step(uv.x, 1.0 + m) * step(uv.y, 1.0 + m); }
 float crestAlpha(vec2 uv, float bias) { return inBox(uv, 0.0) * texture2D(crest, uv, bias).a; }
 void main() {
@@ -38,44 +64,43 @@ void main() {
   float g = clamp(l.x / W * 0.7 + l.y / H * 0.3, 0.0, 1.0);
   vec3 col = mix(vec3(0.098, 0.129, 0.165), vec3(0.055, 0.075, 0.098), smoothstep(0.0, 0.45, g));
   col = mix(col, vec3(0.027, 0.043, 0.063), smoothstep(0.45, 1.0, g));
-  vec2 facet = vor(l / 170.0);
-  col += vec3(0.03, 0.04, 0.05) * (h21(floor(l / 170.0 + facet)) - 0.5);
-  col += vec3(0.55, 0.68, 0.78) * (1.0 - smoothstep(0.0, 0.035, facet.y - facet.x)) * 0.07;
+  col += vec3(0.03, 0.04, 0.05) * (fbm(l * 0.0022) - 0.5);
+  float marks = skate(l, W, H);
+  col += vec3(0.58, 0.68, 0.77) * marks * 0.26;
 
   float reach = mix(70.0, W * 0.5, smoothstep(0.0, 0.75, t));
   float field = fbm(l * 0.011) * 0.65 + fbm(l * 0.047) * 0.35;
   float frostMask = 1.0 - smoothstep(reach * 0.35, reach, d - field * 140.0);
   float fine = fbm(l * 0.17);
-  vec2 cell = vor(l / 34.0);
-  float crystal = 1.0 - smoothstep(0.0, 0.07, cell.y - cell.x);
-  float needles = smoothstep(0.62, 0.9, vnoise(vec2((l.x + l.y) * 0.09, (l.x - l.y) * 0.006)));
+  float crystal = 0.6 + 0.4 * marks;
+  float needles = 0.0;
   float frost = frostMask * (0.18 + 0.42 * fine * crystal + 0.25 * needles * fine + 0.12 * fine);
-  col = mix(col, vec3(0.78, 0.88, 0.95), clamp(frost * 0.62, 0.0, 0.7));
+  col = mix(col, vec3(0.62, 0.72, 0.80), clamp(frost * 0.30, 0.0, 0.35));
   float growFront = exp(-pow((d - field * 140.0 - reach * 0.82) / (reach * 0.08 + 6.0), 2.0)) * frostMask;
-  col += vec3(0.7, 0.86, 1.0) * growFront * 0.16;
+  col += vec3(0.7, 0.86, 1.0) * growFront * 0.06;
 
   float front = exp(-max(d, 0.0) / 13.0);
-  col += vec3(0.82, 0.93, 1.0) * front * 0.8 + vec3(0.45, 0.65, 0.8) * exp(-max(d, 0.0) / 95.0) * 0.2 * fine;
+  col += vec3(0.72, 0.82, 0.90) * front * 0.32 + vec3(0.45, 0.65, 0.8) * exp(-max(d, 0.0) / 95.0) * 0.06 * fine;
   col = mix(col, teamLine, exp(-pow((d - 10.0) / 2.4, 2.0)) * hasTeam * 0.95);
-  col += vec3(0.8, 0.93, 1.0) * exp(-pow((d - 2.5) / 1.1, 2.0));
-  float streak = smoothstep(0.8, 0.96, vnoise(vec2(l.x * 0.0035, l.y * 0.32))) * exp(-max(d, 0.0) / 70.0);
+  col += vec3(0.62, 0.72, 0.80) * 0.55 * exp(-pow((d - 2.5) / 1.1, 2.0));
+  float streak = 0.0;
   vec2 gc = floor(l / 21.0);
   float glint = step(0.986, h21(gc + floor(frame * 0.5) * 7.13)) * frostMask *
     (1.0 - smoothstep(0.0, 3.5, length(fract(l / 21.0) - 0.5) * 21.0));
-  col += vec3(1.0) * (streak * 0.3 + glint * 0.85);
+  col += vec3(1.0) * (streak * 0.08 + glint * 0.25);
   float band = (p.x + p.y * 0.45) / (W + H * 0.45);
-  col += vec3(0.86, 0.95, 1.0) * exp(-pow((band - mix(-0.1, 1.1, t)) / 0.05, 2.0)) * 0.1;
+  col += vec3(0.86, 0.95, 1.0) * exp(-pow((band - mix(-0.1, 1.1, t)) / 0.05, 2.0)) * 0.03;
 
   float spray = smoothstep(0.82, 0.97, vnoise(vec2(p.y * 0.42, l.x * 0.012 + frame * 0.7))) *
     exp(min(d, 0.0) / 34.0) * (1.0 - inside) * vis;
-  col = mix(vec3(0.85, 0.94, 1.0), col, inside);
+  col = mix(vec3(0.30, 0.36, 0.42), col, inside);
   float A = max(inside, spray * 0.65);
 
   vec2 cu = (p - crestC) / crestS + 0.5;
-  float ca = crestAlpha(cu, 0.0) * hasCrest;
-  float shadow = edgeFade(cu - vec2(0.012, 0.022)) * texture2D(crest, cu - vec2(0.012, 0.022), 4.5).a * hasCrest;
-  float glow = edgeFade(cu) * texture2D(crest, cu, 6.5).a * hasCrest;
-  col *= 1.0 - shadow * 0.65 * crestA;
+  float ca = crestAlpha(cu, 0.0) * hasCrest * inside;
+  float shadow = edgeFade(cu - vec2(0.012, 0.022)) * texture2D(crest, cu - vec2(0.012, 0.022), 4.5).a * hasCrest * inside;
+  float glow = edgeFade(cu) * texture2D(crest, cu, 6.5).a * hasCrest * inside;
+  col *= 1.0 - shadow * 0.85 * crestA;
   col += teamGlow * glow * 0.45 * crestA * (1.0 - ca);
   A = max(A, max(shadow * 0.55, glow * 0.4) * crestA);
   vec3 cc = texture2D(crest, cu).rgb;
@@ -83,9 +108,9 @@ void main() {
   float rim = clamp(ca - crestAlpha(cu - lightStep, 0.0), 0.0, 1.0);
   float shade = clamp(crestAlpha(cu + lightStep, 0.0) - ca, -1.0, 0.0);
   vec2 cl = cu * crestS;
-  vec3 ice = mix(cc, vec3(0.85, 0.93, 1.0), fbm(cl * 0.05) * 0.14 + (1.0 - smoothstep(0.0, 0.06, vor(cl / 26.0).y - vor(cl / 26.0).x)) * 0.08);
+  vec3 ice = mix(cc, vec3(0.85, 0.93, 1.0), fbm(cl * 0.05) * 0.14);
   float crestBand = exp(-pow(((cu.x + cu.y * 0.55) / 1.55 - mix(-0.15, 1.15, smoothstep(0.15, 0.85, t))) / 0.07, 2.0));
-  ice += vec3(0.92, 0.98, 1.0) * (rim * 0.9 + crestBand * 0.38 * ca) + teamGlow * 0.12 * ca;
+  ice += vec3(0.92, 0.98, 1.0) * (rim * 0.65 + crestBand * 0.28 * ca) + teamGlow * 0.12 * ca;
   ice *= 1.0 + shade * 0.35;
   col = mix(col, ice, ca * crestA);
   A = mix(A, 1.0, ca * crestA);
@@ -152,20 +177,19 @@ export const FrostPane = ({vertical = false, replay = false, team}) => {
   }, [crest, handle]);
   const k = end / 15;
   const clamp = v => Math.max(0, Math.min(1, v));
-  const crestIn = Easing.out(Easing.cubic)(clamp((f - k) / (4 * k)));
-  const crestOut = Easing.in(Easing.cubic)(clamp((f - 11 * k) / (4 * k)));
+  const crestIn = Easing.inOut(Easing.cubic)(clamp((f - k) / (4 * k)));
+  const crestOut = Easing.inOut(Easing.cubic)(clamp((f - 11 * k) / (4 * k)));
   const crestScale = 1.12 - .12 * crestIn - .04 * crestOut;
   const aspect = crest?.aspect || 1;
-  const crestH = Math.min(height * .6, width * .8 / aspect) * crestScale;
-  const line = rgb(team?.line ?? team?.primary) || new THREE.Vector3(.5, .83, .94);
-  // The crest glow follows the kit line, like the edge line (spec 003).
-  const glow = line;
+  const crestH = Math.min(height * .48, width * .8 / aspect) * crestScale;
+  const line = new THREE.Vector3(.42, .50, .57);
+  const glow = new THREE.Vector3(0, 0, 0);
   const values = {
     res: new THREE.Vector2(width, height), paneX: x, frame: f, dur: end, sweep: f / end,
     crest: crest?.texture || blank, hasCrest: crest ? 1 : 0,
     crestC: new THREE.Vector2(width / 2 + x * .18, height / 2),
     crestS: new THREE.Vector2(crestH * aspect, crestH), crestA: crestIn * (1 - crestOut),
-    teamLine: line, teamGlow: glow, hasTeam: team ? 1 : 0, replay: replay ? 1 : 0,
+    teamLine: line, teamGlow: glow, hasTeam: 0, replay: replay ? 1 : 0,
     hold: f >= first && f <= last ? 1 : 0, vis: Math.abs(x) < width - 1 ? 1 : 0,
   };
   return <AbsoluteFill style={{overflow: 'hidden', pointerEvents: 'none', zIndex: 35}}>
