@@ -334,3 +334,128 @@ def test_people_dismissal_survives_cli_and_failed_outer_edit(pipeline):
         assert reopened.execute("SELECT source FROM people_dismissals").fetchone()[0].startswith("user")
     finally:
         reopened.close()
+
+
+def test_public_event_reimport_cannot_move_preserved_goalie_to_other_team(pipeline):
+    p = pipeline
+    original = freeze(p)
+    keeper = team_db.find_person(p.conn, "ice", SEASON, name="Gail Keeper")
+    team_db.add_roster_player(p.conn, "visitors", SEASON, person=keeper, jersey=31)
+    events = [{"event": "GOAL", "team": "Visitors", "scorer": "Gail Keeper", "jersey": 31,
+               "period": 1, "game_clock": "09:00"}]
+
+    with pytest.raises(ValueError, match="already plays|team|goalkeeper"):
+        team_db.import_events(p.conn, p.game.name, events, {"Visitors": "visitors"}, "user test")
+
+    assert team_db.snapshot(p.conn, p.game.name) == original
+
+
+def test_public_event_reimport_keeps_goalie_worn_number_when_new_event_has_no_number(pipeline):
+    p = pipeline
+    p.sheet["rosters"]["home"].pop("30")
+    p.sheet["rosters"]["home"]["31"] = "Gail Keeper"
+    p.sheet["goalkeeping"]["home"][0]["player"] = "31"
+    original = freeze(p)
+    events = [{"event": "GOAL", "team": "Ice", "scorer": "Gail Keeper",
+               "period": 1, "game_clock": "09:00"}]
+
+    team_db.import_events(p.conn, p.game.name, events, {"Ice": "ice"}, "user test")
+    updated = team_db.snapshot(p.conn, p.game.name)
+
+    assert updated["sheet"]["goalkeeping"] == original["sheet"]["goalkeeping"]
+    assert updated["events"][0]["person"]["jersey"] == 31
+
+
+def test_snapshot_publication_does_not_outlive_rolled_back_outer_transaction(pipeline):
+    p = pipeline
+    original = freeze(p)
+    path = p.game / "game_data.json"
+    previous = path.read_bytes()
+    p.sheet["goals"]["home"][0]["time"] = "02:00"
+    p.conn.execute("BEGIN")
+    try:
+        try:
+            game_data.import_snapshot(p.conn, p.game.name, p.sheet, p.options, p.game)
+        except ValueError as exc:
+            # Rejecting publication inside a caller's transaction is also safe.
+            assert "transaction" in str(exc).lower()
+    finally:
+        p.conn.rollback()
+
+    assert team_db.snapshot(p.conn, p.game.name) == original
+    assert path.read_bytes() == previous, "snapshot contains a game import that the database rolled back"
+
+
+@pytest.mark.parametrize("has_previous", [False, True])
+def test_failed_database_commit_restores_previous_snapshot(pipeline, monkeypatch, has_previous):
+    import sqlite3
+
+    p = pipeline
+    original = freeze(p) if has_previous else None
+    path = p.game / "game_data.json"
+    previous = path.read_bytes() if has_previous else None
+    p.sheet["goals"]["home"][0]["time"] = "02:00"
+    publish = game_data.write_data
+
+    def fail_at_commit(data, target):
+        publish(data, target)
+        # SQLite accepts this row now, but rejects it when the transaction commits.
+        p.conn.execute("PRAGMA defer_foreign_keys = ON")
+        p.conn.execute("INSERT INTO family_links (parent_id, child_id, relation, source) "
+                       "VALUES (1000000, 1000001, 'parent', 'user test')")
+
+    monkeypatch.setattr(game_data, "write_data", fail_at_commit)
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        game_data.import_snapshot(p.conn, p.game.name, p.sheet, p.options, p.game)
+
+    if has_previous:
+        assert team_db.snapshot(p.conn, p.game.name) == original
+        assert path.read_bytes() == previous
+    else:
+        assert not p.conn.execute("SELECT 1 FROM games").fetchone()
+        assert not path.exists()
+    assert not path.with_name(path.name + ".tmp").exists()
+    assert not p.conn.in_transaction
+
+
+def test_selection_period_must_agree_with_frozen_goal_period(pipeline):
+    p = pipeline
+    selected = copy.deepcopy(goal_selection(p.sheet))
+    selected["goals"][0]["period"] = 2
+    data = freeze(p)
+    sheet, _ = game_data.graphics_inputs(data, p.options)
+
+    with pytest.raises(ValueError, match="rerun selection"):
+        game_data.validate_selection(sheet, selected)
+
+
+@pytest.mark.parametrize("infraction", ["MINOR + MISCONDUCT", "MAJOR + GAME MISCONDUCT"])
+def test_multiple_penalty_classes_need_explicit_resolution(pipeline, infraction):
+    p = pipeline
+    original = freeze(p)
+    p.sheet["penalties"]["home"] = [{"per": "1", "player": "8", "infraction": infraction}]
+
+    with pytest.raises(ValueError, match="classification.*game_sheet_overrides.json"):
+        game_data.import_sheet(p.conn, p.game.name, p.sheet, p.options, p.game)
+
+    assert team_db.snapshot(p.conn, p.game.name) == original
+
+
+def test_corrected_date_uses_different_roster_at_season_boundary(pipeline):
+    p = pipeline
+    team_db.store_team(p.conn, "ice", {
+        "name": "Ice", "own_team": True, "listed_roster": [
+            {"name": "Previous Scorer", "jersey": 8},
+            {"name": "Previous Assist", "jersey": 10},
+            {"name": "Previous Keeper", "jersey": 30}],
+    }, "2025-2026", "import previous roster")
+    p.sheet["rosters"]["home"] = {"8": "Previous Scorer", "10": "Previous Assist", "30": "Previous Keeper"}
+    p.sheet = scoresheet.apply_overrides(p.sheet, {"schema_version": 1, "date": "2026-07-31"})
+
+    data = game_data.import_snapshot(p.conn, p.game.name, p.sheet, p.options, p.game)
+
+    assert data["game"]["date"] == "2026-07-31"
+    assert data["game"]["season"] == "2025-2026"
+    assert data["events"][0]["person"]["name"] == "Previous Scorer"
+    assert data["events"][0]["assists"][0]["name"] == "Previous Assist"
+    assert data["sheet"]["goalkeeping"]["ice"][0]["person"]["name"] == "Previous Keeper"

@@ -338,3 +338,45 @@ def test_snapshot_publication_failure_rolls_back_database(setup, monkeypatch):
     assert status["stages"]["scoresheet"]["state"] == "failed"
     assert db.snapshot(conn, game.name) == previous
     assert json.loads((game / "game_data.json").read_text()) == previous
+
+
+@pytest.mark.parametrize("classification,infraction,minutes", [
+    (None, "MAJOR + GAME MISCONDUCT", "5+10"),
+    (None, "MAJOR + GAME MISCONDUCT", None),
+    (" ", "ABUSE", 10),
+    (None, "MINOR + MINOR", None),
+    (None, "GAME MISCONDUCT", "5+10"),
+])
+def test_ambiguous_combined_sheet_classes_need_explicit_correction(classification, infraction, minutes):
+    with pytest.raises(ValueError, match="classification.*game_sheet_overrides.json"):
+        db.sheet_penalty_class(classification, infraction, minutes, False)
+
+
+def test_snapshot_change_reruns_both_graphics_stages_in_saved_status(setup, monkeypatch):
+    import recap_assembly
+    cfg, game, conn, opts, sheet = setup
+    data = imported(setup)
+    opts["audio"] = {"manifest": str(cfg / "missing-manifest.json")}
+    (game / "recap_assembly.json").write_text(json.dumps({"output": "recap.mp4"}))
+    monkeypatch.setattr(recap_assembly, "rife_ready", lambda: False)
+    calls = []
+    def render(name):
+        def run(ctx):
+            calls.append(name)
+            (game / f"{name}.out").write_text("rendered")
+            return runner.StageResult("done")
+        return run
+    stages = [runner.Stage(name, name, fingerprint, lambda ctx, n=name: [f"{n}.out"], render(name))
+              for name, fingerprint in (("graphics", runner._fp_graphics), ("short", runner._fp_short))]
+    first = runner.run_game(game, opts, stages=stages)
+    assert calls == ["graphics", "short"]
+    calls.clear()
+    runner.run_game(game, opts, stages=stages)
+    assert calls == []
+    data["stats"]["ice"][0]["pim"] = 2
+    gd.write_data(data, game / "game_data.json")
+    runner.run_game(game, opts, stages=stages)
+    assert calls == ["graphics", "short"]
+    saved = json.loads((game / "recap_status.json").read_text())
+    assert all(first["stages"][name]["fingerprint"] != saved["stages"][name]["fingerprint"]
+               for name in ("graphics", "short"))

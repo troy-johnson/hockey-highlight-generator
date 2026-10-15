@@ -320,7 +320,8 @@ def test_short_cli_writes_compilation_and_three_goal_outputs(tmp_path, freeze_sh
                        ("rois.json", {"camera_1": {"net": [500, 250, 100, 100]}})]:
         (tmp_path / name).write_text(json.dumps(data))
     command = [sys.executable, str(Path(__file__).resolve().parents[1] / "v3/scripts/short_clips.py"),
-               str(tmp_path), "--options", '{"date": "2026-02-01", "focus_team": "Blue"}']
+               str(tmp_path), "--options", json.dumps({"date": "2026-02-01", "focus_team": "Blue",
+                   "audio": {"manifest": str(tmp_path / "missing-manifest.json")}})]
     subprocess.run(command, check=True)
     plan = json.loads((tmp_path / "short_assembly.json").read_text())
     report = json.loads((tmp_path / "short_audio.json").read_text())

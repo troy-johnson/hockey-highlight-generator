@@ -395,16 +395,21 @@ def penalty_class(value) -> str | None:
 
 def sheet_penalty_class(classification, infraction, minutes, team_only: bool) -> str:
     """Use explicit classes or unambiguous sheet evidence; require review for ambiguous classes."""
-    if classification:
-        return penalty_class(classification)
+    explicit = penalty_class(classification)
+    if explicit is not None:
+        return explicit
+    correction = "penalty classification is unclear; set classification in game_sheet_overrides.json"
     text = " ".join(str(infraction or "").upper().replace("_", " ").split())
-    for label in sorted((*RULEBOOKS["usah"], *CLASS_ALIASES), key=len, reverse=True):
-        if re.search(r"\b" + re.escape(label) + r"\b", text):
-            return penalty_class(label)
+    labels = sorted((*RULEBOOKS["usah"], *CLASS_ALIASES), key=len, reverse=True)
+    matches = re.findall(r"\b(?:" + "|".join(re.escape(label) for label in labels) + r")\b", text)
+    if len(matches) > 1 or "+" in str(minutes):
+        raise ValueError(correction + "; put each extra class in additional")
+    if matches:
+        return penalty_class(matches[0])
     given = parse_minutes(minutes)
     if given in (2, 4, 5):
         return {2: "BENCH MINOR" if team_only else "MINOR", 4: "DOUBLE MINOR", 5: "MAJOR"}[given]
-    raise ValueError("penalty classification is unclear; set classification in game_sheet_overrides.json")
+    raise ValueError(correction)
 
 
 def penalty_minutes(rulebook: str, classification, minutes) -> tuple[str | None, float | None, str | None]:
@@ -906,9 +911,18 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
                     (game_id, team_id, order["penalty"], eid, pid, e.get("period"), e.get("scene"),
                       cls, minutes, rule, extra.get("note"), src))
         for keeper in keepers:
+            current = conn.execute("SELECT team_id FROM game_players WHERE game_id = ? AND person_id = ?",
+                                   (game_id, keeper["person_id"])).fetchone()
+            if current and current[0] != keeper["team_id"]:
+                raise ValueError(f"goalkeeper {keeper['person_id']} already plays for {keeper['team_id']} in this game")
             columns = list(keeper)
-            conn.execute(f"INSERT OR IGNORE INTO game_players ({', '.join(columns)}) "
-                         f"VALUES ({', '.join('?' for _ in columns)})", tuple(keeper.values()))
+            conn.execute(f"INSERT INTO game_players ({', '.join(columns)}) "
+                         f"VALUES ({', '.join('?' for _ in columns)}) ON CONFLICT(game_id, person_id) DO UPDATE SET "
+                         "jersey_worn = COALESCE(game_players.jersey_worn, excluded.jersey_worn), "
+                         "jersey_label = CASE WHEN game_players.jersey_worn IS NULL THEN excluded.jersey_label "
+                         "ELSE game_players.jersey_label END, note = COALESCE(game_players.note, excluded.note), "
+                         "source = CASE WHEN game_players.jersey_worn IS NULL AND excluded.jersey_worn IS NOT NULL "
+                         "THEN excluded.source ELSE game_players.source END", tuple(keeper.values()))
     return sum(order.values())
 
 

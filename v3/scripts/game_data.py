@@ -146,6 +146,8 @@ def write_data(data: dict, path: Path):
 
 def import_snapshot(conn, game_id: str, sheet: dict, options: dict, folder: Path) -> dict:
     """Keep the previous database game when snapshot publication fails."""
+    if conn.in_transaction:
+        raise ValueError("snapshot publication must own its database transaction")
     path = folder / db.SNAPSHOT_FILE
     previous = path.read_bytes() if path.exists() else None
     published = False
@@ -241,10 +243,13 @@ def validate_selection(sheet: dict, selection: dict):
     if len(goals) != len(rows) or {g["id"] for g in goals} != set(rows):
         raise ValueError("selection goals do not match game_data.json; rerun selection")
     for goal in goals:
+        row = rows[goal["id"]]
+        expected_period = int(row["per"]) if row["per"].isdigit() else None
+        if goal.get("period") is not None and goal["period"] != expected_period:
+            raise ValueError("selection periods do not match game_data.json; rerun selection")
         claim = goal.get("sheet")
         if not isinstance(claim, dict):
             continue
-        row = rows[goal["id"]]
         per = str(claim.get("per") or "")
         period = {"OT": "4", "SO": "5"}.get(per.upper(), per)
         clock = claim.get("time_s")
