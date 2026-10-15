@@ -279,6 +279,9 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
     sheet_ids = {f"{s}:{i + 1}" for s in ("home", "away") for i, _ in enumerate(sheet["goals"].get(s, []))}
     if set(goal_order) != sheet_ids or len(goal_order) != len(sheet_ids):
         raise ValueError("selection goals do not match game_sheet.json; rerun selection")
+    if "_final" in sheet:
+        from game_data import validate_selection
+        validate_selection(sheet, selection)
     def score_before(gid, inclusive=False):
         stop = goal_order.index(gid) + int(inclusive)
         return [sum(g.startswith(s + ":") for g in goal_order[:stop]) for s in ("home", "away")]
@@ -349,8 +352,8 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
             num = str(row.get("player") or "?")
             events.append({"kind": "penalty", "startFrame": start,
                            "durationFrames": min(4 * fps, frames - start),
-                            "data": {"id": gid, "team": side, "num": player_number(sheet, side, num),
-                                    "name": player_name(sheet, side, num),
+                            "data": {"id": gid, "team": side, "num": "" if row.get("team_only") else player_number(sheet, side, num),
+                                     "name": sheet["teams"][side] if row.get("team_only") else player_name(sheet, side, num),
                                      "minutes": row.get("minutes") if row.get("minutes") is not None else "?",
                                      "infraction": row.get("infraction") or "PENALTY"}})
         elif cue["cue"] == "sfx_period_wipe":

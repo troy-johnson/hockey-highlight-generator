@@ -285,3 +285,56 @@ def test_dismissal_survives_reopen_and_does_not_hide_other_pairs(setup):
         assert reopened.execute("SELECT source FROM people_dismissals").fetchone()[0].startswith("user ")
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("infraction,minutes,team_only,classification,pim", [
+    ("TRIPPING", "2", False, "MINOR", 2),
+    ("HIGH STICK", "4", False, "DOUBLE MINOR", 4),
+    ("FIGHTING", "5", False, "MAJOR", 5),
+    ("GAME MISCONDUCT", None, False, "GAME MISCONDUCT", 10),
+    ("TOO MANY MEN", "2", True, "BENCH MINOR", 2),
+])
+def test_sheet_penalty_classification_uses_recorded_evidence(setup, infraction, minutes, team_only, classification, pim):
+    cfg, game, conn, opts, sheet = setup
+    sheet["penalties"]["away"] = [{"per": "1", "player": None if team_only else "7",
+                                  "infraction": infraction, "minutes": minutes}]
+    data = gd.import_sheet(conn, game.name, sheet, opts, game)
+    penalty = data["events"][-1]
+    assert penalty["classification"] == classification
+    assert penalty["minutes"] == pim
+    assert data["team_pim"]["visitors"] == pim
+
+
+def test_ambiguous_sheet_penalty_classification_stops_with_correction_path(setup):
+    cfg, game, conn, opts, sheet = setup
+    original = imported(setup)
+    sheet["penalties"]["away"] = [{"per": "1", "player": "7", "infraction": "ABUSE", "minutes": 10}]
+    with pytest.raises(ValueError, match="classification.*game_sheet_overrides.json"):
+        gd.import_sheet(conn, game.name, sheet, opts, game)
+    assert db.snapshot(conn, game.name) == original
+
+
+def test_corrected_sheet_date_selects_its_season_roster(setup):
+    cfg, game, conn, opts, sheet = setup
+    for tid in ("ice", "visitors"):
+        db.import_team(conn, cfg / "teams" / f"{tid}.json", "2025-2026")
+    applied = scoresheet.apply_overrides(sheet, {"schema_version": 1, "date": "2026-07-31"})
+    data = gd.import_sheet(conn, game.name, applied, opts, game)
+    assert data["game"]["date"] == "2026-07-31"
+    assert data["game"]["season"] == "2025-2026"
+
+
+def test_snapshot_publication_failure_rolls_back_database(setup, monkeypatch):
+    cfg, game, conn, opts, sheet = setup
+    previous = imported(setup)
+    sheet["goals"]["home"][0]["time"] = "2:00"
+    (game / "game_sheet.json").write_text(json.dumps(sheet))
+    monkeypatch.setattr(runner.Context, "run_cmd", lambda *args: (0, []))
+    def fail(*args):
+        raise OSError("snapshot publication failed")
+    monkeypatch.setattr(gd, "write_data", fail)
+    stage = next(s for s in runner.STAGES if s.name == "scoresheet")
+    status = runner.run_game(game, opts, stages=[stage])
+    assert status["stages"]["scoresheet"]["state"] == "failed"
+    assert db.snapshot(conn, game.name) == previous
+    assert json.loads((game / "game_data.json").read_text()) == previous

@@ -245,6 +245,19 @@ def validate_season(season: str) -> str:
     return season
 
 
+def league_game_rules(date: str | None, rules: dict) -> tuple[str | None, str]:
+    """Resolve the Season and penalty rulebook through one set of defaults and checks."""
+    season = rules.get("season")
+    if season is None and date is not None:
+        season = season_for(date, rules.get("season_start_month", 8))
+    if season is not None:
+        validate_season(season)
+    rulebook = rules.get("rulebook", "usah")
+    if rulebook not in RULEBOOKS:
+        raise ValueError(f"unknown League rulebook {rulebook!r}; use usah or nhl")
+    return season, rulebook
+
+
 @contextmanager
 def transaction(conn):
     """Keep nested imports and edits in the caller's transaction."""
@@ -378,6 +391,20 @@ def penalty_class(value) -> str | None:
         raise ValueError(f"penalty class {value!r} is not one of {', '.join(RULEBOOKS['usah'])}; "
                          "give each class as its own (additional) penalty")
     return text
+
+
+def sheet_penalty_class(classification, infraction, minutes, team_only: bool) -> str:
+    """Use explicit classes or unambiguous sheet evidence; require review for ambiguous classes."""
+    if classification:
+        return penalty_class(classification)
+    text = " ".join(str(infraction or "").upper().replace("_", " ").split())
+    for label in sorted((*RULEBOOKS["usah"], *CLASS_ALIASES), key=len, reverse=True):
+        if re.search(r"\b" + re.escape(label) + r"\b", text):
+            return penalty_class(label)
+    given = parse_minutes(minutes)
+    if given in (2, 4, 5):
+        return {2: "BENCH MINOR" if team_only else "MINOR", 4: "DOUBLE MINOR", 5: "MAJOR"}[given]
+    raise ValueError("penalty classification is unclear; set classification in game_sheet_overrides.json")
 
 
 def penalty_minutes(rulebook: str, classification, minutes) -> tuple[str | None, float | None, str | None]:
@@ -607,6 +634,16 @@ def merge_people(conn, keep: int, drop: int) -> None:
                            ("family_links", "child_id")):
             conn.execute(f"UPDATE OR IGNORE {table} SET {col} = ? WHERE {col} = ?", (keep, drop))
         conn.execute("DELETE FROM family_links WHERE parent_id = ? OR child_id = ?", (drop, drop))
+        for game in conn.execute("SELECT id, sheet_data FROM games").fetchall():
+            details = json.loads(game["sheet_data"])
+            changed = False
+            for rows in details.get("goalkeeping", {}).values():
+                for row in rows:
+                    if row["person_id"] == drop:
+                        row["person_id"] = keep
+                        changed = True
+            if changed:
+                set_sheet_data(conn, game["id"], details)
         for row in conn.execute("SELECT * FROM people_dismissals WHERE person_a = ? OR person_b = ?",
                                 (drop, drop)).fetchall():
             pair = sorted(keep if p == drop else p for p in (row["person_a"], row["person_b"]))
@@ -757,7 +794,31 @@ def _game(conn, game_id: str) -> sqlite3.Row:
     return row
 
 
-def _game_player(conn, game_id, team_id, season, name, jersey, source, note=None) -> int:
+def set_game_sides(conn, game_id: str, sides: dict[str, str], source: str):
+    """Replace the applied sheet's home and away assignments."""
+    if set(sides) != {"home", "away"} or len(set(sides.values())) != 2:
+        raise ValueError("a game needs two different teams, home and away")
+    source = source_of(source)
+    with transaction(conn):
+        _game(conn, game_id)
+        conn.execute("DELETE FROM game_teams WHERE game_id = ? AND team_id NOT IN (?, ?)",
+                     (game_id, sides["home"], sides["away"]))
+        for side, team in sides.items():
+            conn.execute("INSERT INTO game_teams (game_id, team_id, side, source) VALUES (?, ?, ?, ?) "
+                         "ON CONFLICT(game_id, team_id) DO UPDATE SET side = excluded.side, source = excluded.source",
+                         (game_id, team, side, source))
+
+
+def set_sheet_data(conn, game_id: str, details: dict):
+    """Keep applied sheet fields that supplement normalized game events."""
+    with transaction(conn):
+        _game(conn, game_id)
+        conn.execute("UPDATE games SET sheet_data = ? WHERE id = ?", (json.dumps(details), game_id))
+
+
+def record_game_player(conn, game_id, team_id, season, name, jersey, source, note=None) -> int:
+    """Resolve a sheet player and record the jersey worn, without creating an unknown person."""
+    source = source_of(source)
     number, label = parse_jersey(jersey)
     if not (name and clean_name(name)) and number is None:
         raise ValueError(f"{team_id}: a player needs a name or a jersey")
@@ -779,7 +840,7 @@ def _game_player(conn, game_id, team_id, season, name, jersey, source, note=None
 
 
 def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, str],
-                  source: str = "user") -> int:
+                  source: str = "user", *, preserve_sheet_players: bool = True) -> int:
     """Replace a game's events, all or nothing. team_names maps an event 'team' name to a team id.
 
     The import file is the record for these events: corrections go into that file, then reimport.
@@ -788,6 +849,10 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
     season = game["season"]
     in_game = {r[0] for r in conn.execute("SELECT team_id FROM game_teams WHERE game_id = ?", (game_id,))}
     with transaction(conn):
+        keeper_ids = {r["person_id"] for rows in json.loads(game["sheet_data"]).get("goalkeeping", {}).values()
+                      for r in rows} if preserve_sheet_players else set()
+        keepers = [dict(r) for r in conn.execute("SELECT * FROM game_players WHERE game_id = ?", (game_id,))
+                   if r["person_id"] in keeper_ids]
         conn.execute("DELETE FROM event_assists WHERE event_id IN (SELECT id FROM events WHERE game_id = ?)", (game_id,))
         conn.execute("DELETE FROM events WHERE game_id = ? AND parent_event_id IS NOT NULL", (game_id,))
         conn.execute("DELETE FROM events WHERE game_id = ?", (game_id,))
@@ -806,7 +871,7 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
             if kind == "penalty" and not name and e.get("jersey") in (None, ""):
                 pid = None  # team or bench penalty: no player
             else:
-                pid = _game_player(conn, game_id, team_id, season, name, e.get("jersey"), src, e.get("jersey_note"))
+                pid = record_game_player(conn, game_id, team_id, season, name, e.get("jersey"), src, e.get("jersey_note"))
             if kind == "penalty":
                 cls, minutes, rule = penalty_minutes(game["rulebook"], e.get("classification"), e.get("minutes"))
             else:
@@ -839,7 +904,11 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
                     "classification, minutes, minutes_rule, note, source) "
                     "VALUES (?, ?, 'penalty', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (game_id, team_id, order["penalty"], eid, pid, e.get("period"), e.get("scene"),
-                     cls, minutes, rule, extra.get("note"), src))
+                      cls, minutes, rule, extra.get("note"), src))
+        for keeper in keepers:
+            columns = list(keeper)
+            conn.execute(f"INSERT OR IGNORE INTO game_players ({', '.join(columns)}) "
+                         f"VALUES ({', '.join('?' for _ in columns)})", tuple(keeper.values()))
     return sum(order.values())
 
 
@@ -849,7 +918,7 @@ def _assist_ids(conn, game_id, team_id, season, in_game, assists, scorer, source
     ids = []
     for a in assists:
         try:
-            pid = _game_player(conn, game_id, team_id, season, a.get("name"), a.get("jersey"), source)
+            pid = record_game_player(conn, game_id, team_id, season, a.get("name"), a.get("jersey"), source)
         except ValueError:
             for other in in_game - {team_id}:
                 if find_person(conn, other, season, name=a.get("name"), jersey=a.get("jersey"), required=False):

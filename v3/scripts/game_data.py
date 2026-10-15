@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import json
 import os
 import sys
@@ -65,10 +66,16 @@ def _team_ids(conn, sheet: dict, options: dict, season: str) -> dict:
 
 def import_sheet(conn, game_id: str, sheet: dict, options: dict, folder: str | Path) -> dict:
     """Replace one game's applied sheet in one transaction. Unknown people stop the import."""
-    date = options.get("date") or sheet.get("date")
+    date = sheet.get("date") or options.get("date")
+    if date:
+        for pattern in ("%Y-%m-%d", "%b %d, %Y", "%B %d, %Y", "%m/%d/%Y"):
+            try:
+                date = dt.datetime.strptime(date, pattern).date().isoformat()
+                break
+            except ValueError:
+                continue
     rules = options.get("league_rules") or {}
-    season = rules.get("season") or db.season_for(date, rules.get("season_start_month", 8))
-    rulebook = rules.get("rulebook", "usah")
+    season, rulebook = db.league_game_rules(date, rules)
     with db.transaction(conn):
         ids = _team_ids(conn, sheet, options, season)
         focus = options.get("focus_team")
@@ -80,12 +87,7 @@ def import_sheet(conn, game_id: str, sheet: dict, options: dict, folder: str | P
             focus = matches[0]
         db.add_game(conn, game_id, date, list(ids.values()), focus, str(folder),
                     source="sheet game_sheet.json", rulebook=rulebook, season=season)
-        # A corrected team must replace the old game's team, not leave a third team.
-        conn.execute("DELETE FROM game_teams WHERE game_id = ? AND team_id NOT IN (?, ?)",
-                     (game_id, ids["home"], ids["away"]))
-        for side, tid in ids.items():
-            conn.execute("UPDATE game_teams SET side = ?, source = 'sheet game_sheet.json' "
-                         "WHERE game_id = ? AND team_id = ?", (side, game_id, tid))
+        db.set_game_sides(conn, game_id, ids, "sheet game_sheet.json")
         events = []
         for key, kind in (("goals", "GOAL"), ("penalties", "PENALTY")):
             for side in SIDES:
@@ -106,8 +108,12 @@ def import_sheet(conn, game_id: str, sheet: dict, options: dict, folder: str | P
                              "additional": row.get("additional")}
                     if kind == "GOAL":
                         event["assists"] = [_sheet_player(sheet, side, v) for v in row.get("assists") or []]
+                    else:
+                        event["classification"] = db.sheet_penalty_class(row.get("classification"), row.get("infraction"),
+                            row.get("minutes"), not player["name"] and player["jersey"] in (None, ""))
                     events.append(event)
-        db.import_events(conn, game_id, events, {tid: tid for tid in ids.values()}, "sheet game_sheet.json")
+        db.import_events(conn, game_id, events, {tid: tid for tid in ids.values()}, "sheet game_sheet.json",
+                         preserve_sheet_players=False)
         details = {key: copy.deepcopy(sheet[key]) for key in ("shots_on_goal", "score_by_periods", "final_score", "flags")
                    if key in sheet}
         details["goalkeeping"] = {}
@@ -117,18 +123,51 @@ def import_sheet(conn, game_id: str, sheet: dict, options: dict, folder: str | P
                 player = _sheet_player(sheet, side, row["player"])
                 # A goalie name on the applied sheet is also a claim, not a new person.
                 name = row.get("name") or player["name"]
-                pid = db._game_player(conn, game_id, ids[side], season, name, player["jersey"], sheet_source(row))
-                rows.append({**{k: v for k, v in row.items() if k not in ("player", "name")}, "person_id": pid})
+                source = sheet_source(row)
+                if _player_source(sheet, side, row["player"]).startswith("override"):
+                    source = "override game_sheet_overrides.json"
+                pid = db.record_game_player(conn, game_id, ids[side], season, name, player["jersey"], source)
+                rows.append({**{k: v for k, v in row.items() if k not in ("player", "name")},
+                             "person_id": pid, "source": source})
             details["goalkeeping"][ids[side]] = rows
-        conn.execute("UPDATE games SET sheet_data = ? WHERE id = ?", (json.dumps(details), game_id))
+        db.set_sheet_data(conn, game_id, details)
         data = db.snapshot(conn, game_id)
     return data
 
 
 def write_data(data: dict, path: Path):
     temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    os.replace(temp, path)
+    try:
+        temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def import_snapshot(conn, game_id: str, sheet: dict, options: dict, folder: Path) -> dict:
+    """Keep the previous database game when snapshot publication fails."""
+    path = folder / db.SNAPSHOT_FILE
+    previous = path.read_bytes() if path.exists() else None
+    published = False
+    try:
+        with db.transaction(conn):
+            data = import_sheet(conn, game_id, sheet, options, folder)
+            write_data(data, path)
+            published = True
+        return data
+    except Exception:
+        if published:  # A database commit failed after the file replacement.
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                temp = path.with_name(path.name + ".tmp")
+                temp.write_bytes(previous)
+                os.replace(temp, path)
+        raise
+
+
+def jersey_label(person: dict) -> str:
+    return person.get("jersey_label") or (str(person["jersey"]) if person["jersey"] is not None else "?")
 
 
 def graphics_inputs(data: dict, options: dict) -> tuple[dict, dict]:
@@ -139,7 +178,8 @@ def graphics_inputs(data: dict, options: dict) -> tuple[dict, dict]:
     if any(side not in ids for side in SIDES):
         raise ValueError("game_data.json needs home and away sides; rerun scoresheet")
     sheet = {"date": data["game"]["date"], "teams": {}, "rosters": {}, "goals": {}, "penalties": {},
-             "goalkeeping": {}, "_numbers": {}, "flags": list(data.get("flags") or [])}
+             "goalkeeping": {}, "_numbers": {}, "flags": list(data.get("flags") or [])
+             + list(data.get("sheet", {}).get("flags") or [])}
     final = {"score": [data["score"][ids[s]] for s in SIDES], "table": {}}
     configs = {}
     for side in SIDES:
@@ -156,8 +196,7 @@ def graphics_inputs(data: dict, options: dict) -> tuple[dict, dict]:
                 return "?"
             key = str(person["id"])
             sheet["rosters"][side][key] = person["name"]
-            sheet["_numbers"][side][key] = person.get("jersey_label") or (
-                str(person["jersey"]) if person["jersey"] is not None else "?")
+            sheet["_numbers"][side][key] = jersey_label(person)
             return key
 
         for kind, target in (("goal", "goals"), ("penalty", "penalties")):
@@ -169,12 +208,11 @@ def graphics_inputs(data: dict, options: dict) -> tuple[dict, dict]:
                              "assists": [player(p) for p in event.get("assists", [])],
                              "per": str(event["period"] or ""), "time": event.get("clock"),
                              "type": event.get("type"), "minutes": event.get("minutes"),
-                             "infraction": event.get("infraction")})
+                             "infraction": event.get("infraction"), "team_only": event["person"] is None})
             sheet[target][side] = rows
         sheet["goalkeeping"][side] = [{**r, "player": player(r["person"]), "name": r["person"]["name"]}
                                          for r in (data.get("sheet", {}).get("goalkeeping") or {}).get(tid, [])]
-        final["table"][side] = {"skaters": [{"num": r.get("jersey_label") or (
-            str(r["jersey"]) if r["jersey"] is not None else "?"),
+        final["table"][side] = {"skaters": [{"num": jersey_label(r),
             **{k: r[k] for k in ("name", "g", "a", "pts", "pim")}} for r in data["stats"][tid]], "goalies": []}
     sheet["shots_on_goal"] = copy.deepcopy(data.get("sheet", {}).get("shots_on_goal") or {})
     # Goalie figures use only fields frozen in the snapshot.
@@ -192,3 +230,31 @@ def graphics_inputs(data: dict, options: dict) -> tuple[dict, dict]:
 
 def load_graphics_inputs(root: Path, options: dict) -> tuple[dict, dict]:
     return graphics_inputs(json.loads((root / db.SNAPSHOT_FILE).read_text()), options)
+
+
+def validate_selection(sheet: dict, selection: dict):
+    """Check frozen goal identities and sheet clocks before using Selection timing."""
+    from scoresheet import parse_time
+    from selection import elapsed_time
+    rows = {f"{side}:{i + 1}": row for side in SIDES for i, row in enumerate(sheet["goals"][side])}
+    goals = selection.get("goals") or []
+    if len(goals) != len(rows) or {g["id"] for g in goals} != set(rows):
+        raise ValueError("selection goals do not match game_data.json; rerun selection")
+    for goal in goals:
+        claim = goal.get("sheet")
+        if not isinstance(claim, dict):
+            continue
+        row = rows[goal["id"]]
+        per = str(claim.get("per") or "")
+        period = {"OT": "4", "SO": "5"}.get(per.upper(), per)
+        clock = claim.get("time_s")
+        if clock is None:
+            clock = parse_time(str(claim.get("time") or ""))
+        if period != row["per"] or clock != parse_time(str(row.get("time") or "")):
+            raise ValueError("selection clocks do not match game_data.json; rerun selection")
+        if clock is not None and goal.get("elapsed_s") is not None and goal.get("period_s") is not None:
+            direction = (selection.get("rules") or {}).get("time_direction")
+            directions = [direction] if direction else ["remaining", "elapsed"]
+            expected = [elapsed_time(clock, goal["period_s"], d) for d in directions]
+            if goal["elapsed_s"] not in expected:
+                raise ValueError("selection elapsed times do not match game_data.json; rerun selection")

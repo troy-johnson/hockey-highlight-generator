@@ -225,22 +225,18 @@ def resolve_options(game_folder: str, cli: dict | None = None, cfg_override: str
     opts["teams"] = deep_merge(teams, opts.get("teams", {}))
     opts = deep_merge(opts, game_values)
     opts = deep_merge(opts, cli)
-    from team_db import season_for, validate_season, RULEBOOKS
-    rules = opts["league_rules"]
-    season = rules.get("season")
-    if season is None and opts.get("date"):
-        season = season_for(opts["date"], rules.get("season_start_month", 8))
+    from team_db import league_game_rules
+    season, rulebook = league_game_rules(opts.get("date"), opts["league_rules"])
     if season is not None:
-        validate_season(season)
         _, seasonal_teams = load_config(cfg, season)
         # The database owns identity and Roster data, including an empty Roster.
         for tid, team in seasonal_teams.items():
             if team.get("_source") == "database":
                 opts["teams"][tid] = deep_merge(opts["teams"].get(tid, {}), team)
+                for key in ("roster", "listed_roster"):
+                    opts["teams"][tid][key] = copy.deepcopy(team[key])
     opts["season"] = season
-    opts["rulebook"] = rules.get("rulebook", "usah")
-    if opts["rulebook"] not in RULEBOOKS:
-        raise ValueError(f"unknown League rulebook {opts['rulebook']!r}; use usah or nhl")
+    opts["rulebook"] = rulebook
     # A CLI Focus Team changes its default kit for this run only (never written).
     kit_entry = game.get("kit")
     if "focus_team" in cli and "kit" not in cli and (

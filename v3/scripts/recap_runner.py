@@ -386,14 +386,13 @@ def _run_scoresheet(ctx):
                            "ML stack missing")
     if rc != 0:
         return StageResult("failed", [f"Scoresheet reader failed: {_last_error(lines)}"], _last_error(lines))
-    from game_data import import_sheet, write_data
+    from game_data import import_snapshot
     from team_db import connect, db_path
     sheet = json.loads((ctx.game_folder / "game_sheet.json").read_text())
     path = db_path((ctx.options.get("_layers") or {}).get("config_dir"))
     conn = connect(path)
     try:
-        data = import_sheet(conn, ctx.game_folder.name, sheet, ctx.options, ctx.game_folder)
-        write_data(data, ctx.game_folder / "game_data.json")
+        data = import_snapshot(conn, ctx.game_folder.name, sheet, ctx.options, ctx.game_folder)
     finally:
         conn.close()
     flags = []
