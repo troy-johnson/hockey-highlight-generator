@@ -105,3 +105,73 @@ def test_config_dir_env(monkeypatch, tmp_path):
     monkeypatch.setenv("HHG_CONFIG_DIR", str(tmp_path))
     assert ro.config_dir() == tmp_path
     assert ro.config_dir(str(tmp_path / "x")) == tmp_path / "x"
+
+
+def test_timing_rules_follow_game_and_cli_layers(game, cfg):
+    ro.resolve_options(str(game), cfg_override=str(cfg))
+    path = game / ro.OPTIONS_FILE
+    data = json.loads(path.read_text())
+    data["league_rules"] = {"period_minutes": 13, "clock": "stop", "time_direction": "remaining"}
+    path.write_text(json.dumps(data))
+    options = ro.resolve_options(str(game), cli={"league_rules": {"period_minutes": 12}}, cfg_override=str(cfg))
+    assert options["league_rules"] == {
+        "periods": 3, "period_length_min": 15, "period_minutes": 12,
+        "clock": "stop", "time_direction": "remaining",
+    }
+    assert json.loads(path.read_text())["league_rules"]["period_minutes"] == 13
+
+
+def test_game_team_assets_survive_option_resolution(game, cfg):
+    ro.resolve_options(str(game), cfg_override=str(cfg))
+    path = game / ro.OPTIONS_FILE
+    data = json.loads(path.read_text())
+    data["teams"] = {"icepak": {"logo": "/assets/crest.png", "lockup": "/assets/lockup.png"}}
+    path.write_text(json.dumps(data))
+    options = ro.resolve_options(str(game), cli={"teams": {"icepak": {"wordmark": "/assets/wordmark.png"}}},
+                                 cfg_override=str(cfg))
+    assert options["teams"]["icepak"]["name"] == "Ice Pak"
+    assert options["teams"]["icepak"]["logo"] == "/assets/crest.png"
+    assert options["teams"]["icepak"]["lockup"] == "/assets/lockup.png"
+    assert options["teams"]["icepak"]["wordmark"] == "/assets/wordmark.png"
+
+
+def test_kit_is_inferred_from_the_focus_team_default_kit(game, cfg):
+    team = json.loads((cfg / "teams" / "icepak.json").read_text())
+    team["default_kit"] = "red"
+    (cfg / "teams" / "icepak.json").write_text(json.dumps(team))
+    opts = ro.resolve_options(str(game), cfg_override=str(cfg))
+    data = json.loads((game / ro.OPTIONS_FILE).read_text())
+    assert data["kit"] == {"value": "red", "inferred": True, "source": "default_kit of icepak"}
+    assert opts["kit"] == "red"
+    data["kit"] = {"value": "navy", "inferred": False, "source": "user"}
+    (game / ro.OPTIONS_FILE).write_text(json.dumps(data))
+    assert ro.resolve_options(str(game), cfg_override=str(cfg))["kit"] == "navy"
+    assert ro.resolve_options(str(game), cli={"kit": "white"}, cfg_override=str(cfg))["kit"] == "white"
+
+
+def test_kit_is_empty_without_a_default_kit(game, cfg):
+    ro.resolve_options(str(game), cfg_override=str(cfg))
+    data = json.loads((game / ro.OPTIONS_FILE).read_text())
+    assert data["kit"]["value"] is None
+    assert data["kit"]["source"] == "no default_kit in Team Config"
+
+
+def test_kit_follows_the_selected_focus_team_not_the_inferred_one(game, cfg):
+    for tid, kit in (("icepak", "red"), ("pak2", "navy")):
+        path = cfg / "teams" / f"{tid}.json"
+        team = json.loads(path.read_text()) if path.exists() else {"name": "Pak Two", "own_team": True}
+        team["default_kit"] = kit
+        path.write_text(json.dumps(team))
+    # Two own teams: nothing is inferred until the user pins one.
+    ro.resolve_options(str(game), cfg_override=str(cfg))
+    data = json.loads((game / ro.OPTIONS_FILE).read_text())
+    assert data["kit"]["value"] is None
+    data["focus_team"] = {"value": "pak2", "inferred": False, "source": "user"}
+    (game / ro.OPTIONS_FILE).write_text(json.dumps(data))
+    assert ro.resolve_options(str(game), cfg_override=str(cfg))["kit"] == "navy"
+    assert json.loads((game / ro.OPTIONS_FILE).read_text())["kit"]["value"] == "navy"
+    # A CLI Focus Team changes the kit for that run only.
+    assert ro.resolve_options(str(game), cli={"focus_team": "icepak"}, cfg_override=str(cfg))["kit"] == "red"
+    assert json.loads((game / ro.OPTIONS_FILE).read_text())["kit"]["value"] == "navy"
+    assert ro.resolve_options(str(game), cli={"focus_team": "icepak", "kit": "white"},
+                              cfg_override=str(cfg))["kit"] == "white"

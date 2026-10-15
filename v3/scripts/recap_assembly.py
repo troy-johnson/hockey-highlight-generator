@@ -20,7 +20,7 @@ MAX_FRAMES = 240 * FPS
 GOAL_ACTION_S = 3.0  # Selection locates action, not puck crossing. Keep this much after the moment.
 MIN_BUILD_UP_S = 2.0
 ZOOM_MIN, ZOOM_MAX = 1.15, 1.3  # punch-in framing from the 4K source (spec 002 §5.7)
-ZOOM_TIGHT_MAX = 2.5  # replay punch-in never crops tighter than 0.4 of the frame
+ZOOM_TIGHT_MAX = 1.25  # Keep at least 80 percent of the frame for attacking players.
 FISHEYE_CROP = 0.06  # fraction cropped from each edge to hide fisheye distortion
 MAX_LEVEL_DEG = 6.0  # horizon leveling is clamped to a gentle correction
 MAX_LINE_DEG = 8.0  # a "boards" line may deviate at most this much from horizontal
@@ -29,23 +29,18 @@ SLOW_MO = 0.5  # replay playback speed
 # 60 fps plays natively smooth slow motion and never needs interpolation.
 NATIVE_SLOW_FPS = FPS / SLOW_MO
 MIN_REPLAY_S = 0.8
-# The whistle detection leads the puck crossing: on the validated game the scoring
-# frame sits a median 0.68 s after the detection (offsets -1.5 .. +2.1 s), so replay
-# windows center on detection + 0.75 s instead of the detection itself (11/14 covered
-# vs 10/14 with no bias).
-REPLAY_WINDOW_BIAS = 0.75
-# Replay budget tiers by goal count (spec 002 §5.8): shot kinds and their source seconds.
-REPLAY_SHOTS = {1: (("wide", 2.0), ("tight", 2.0)),
-                2: (("tight", 2.5),),
-                3: (("tight", 2.0),)}
+# Recorded goal offsets range from -1.5 to +2.1 seconds around detection.
+# One four-second replay includes setup and the scoring outcome across that range.
+REPLAY_WINDOW_BIAS = 0.25
+REPLAY_SHOTS = {1: (("tight", 4.0),),
+                2: (("tight", 4.0),),
+                3: (("tight", 4.0),)}
 # Spec 002 §5.8: the Recap is about three minutes. After the goals, chosen plays
 # and their replay blocks, the fill restores cut goals first and then adds filler
 # plays from the Next Best list.
 FILL_TARGET_S = 180.0
-# User policy (2026-10-02): a Next Best play preempts the next cut goal in the
-# fill only when its score beats the goal's interest by this margin; goals fill
-# first otherwise.
-FILL_PLAY_ADVANTAGE = 0.25
+OPEN_STINGER_FRAMES = 135  # the Remotion fallback stinger, drawn over black frames
+OPEN_DISSOLVE = 9  # a pre-rendered opening dissolves into the first play over its last frames
 # Only the best non-goal play gets a short replay (spec 002 §5.6); one tight shot.
 BEST_PLAY_REPLAY_S = 2.0
 
@@ -114,6 +109,20 @@ def probe_fps(path: str) -> float | None:
         return num / den if den else None
     except (TypeError, ValueError):
         return None
+
+
+def probe_opening(path: str) -> dict:
+    """Frame count of a pre-rendered opening video. It must be 1920x1080 at 30 fps."""
+    out = subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                                   "-show_entries", "stream=width,height,avg_frame_rate,nb_read_frames",
+                                   "-of", "json", str(path)])
+    stream = (json.loads(out).get("streams") or [{}])[0]
+    if (stream.get("width"), stream.get("height"), stream.get("avg_frame_rate")) != (1920, 1080, f"{FPS}/1"):
+        raise ValueError(f"opening video must be 1920x1080 at {FPS} fps: {path}")
+    frames = int(stream.get("nb_read_frames") or 0)
+    if frames <= OPEN_DISSOLVE + FPS:
+        raise ValueError(f"opening video is too short ({frames} frames): {path}")
+    return {"path": str(path), "frames": frames, "dissolve": OPEN_DISSOLVE}
 
 
 def _frame_horizon_deg(image) -> float | None:
@@ -203,7 +212,7 @@ def load_rois(root: Path) -> dict:
 
 
 def _tight_zoom(cam: str, rois: dict | None, angle_deg: float = 0.0) -> tuple[dict, bool]:
-    """Static punch-in crop on the goal frame box, as fractions of the fisheye-cropped frame."""
+    """Frame the attack above the net in the fisheye-cropped frame."""
     roi = (rois or {}).get(cam, {}).get("net")
     if not roi or len(roi) != 4:
         return {"type": "static", "z": ZOOM_MAX}, False
@@ -216,7 +225,7 @@ def _tight_zoom(cam: str, rois: dict | None, angle_deg: float = 0.0) -> tuple[di
     if wf >= 1:
         return {"type": "roi", "wf": 1.0, "hf": 1.0, "cx": .5, "cy": .5}, True
     cx = min(max(((x + w / 2) / 1280 - FISHEYE_CROP) / keep, wf / 2), 1 - wf / 2)
-    cy = min(max(((y + h / 2) / 720 - FISHEYE_CROP) / keep, hf / 2), 1 - hf / 2)
+    cy = min(max((y / 720 - FISHEYE_CROP) / keep, hf / 2), 1 - hf / 2)
     if angle_deg:
         # The levelling rotation in _pre_filter moves the box: rotate the crop center the
         # same visual amount (positive angle = horizon slopes down to the right = content
@@ -251,17 +260,82 @@ def _trim_context(clips: list[dict], side: str, floor_s: float, over_s: float) -
     return take
 
 
+def load_play_reviews(root: Path, selection: dict) -> dict:
+    """Apply saved play reviews without changing detector output."""
+    import copy
+
+    path = root / "play_review.json"
+    if not path.exists():
+        return selection
+    report = json.loads(path.read_text())
+    if report.get("schema_version") != 1 or not isinstance(report.get("plays"), dict):
+        raise ValueError("invalid play_review.json schema")
+    reviewed = copy.deepcopy(selection)
+    plays = {p["id"]: p for p in reviewed.get("plays", [])}
+    for play_id, review in report["plays"].items():
+        if not isinstance(review, dict) or review.get("status") not in ("keep", "reject", "uncertain"):
+            raise ValueError(f"{play_id}: invalid play review status")
+        if "camera" in review:
+            raise ValueError(f"{play_id}: camera changes require new source boundaries; unsupported in play reviews")
+        if play_id not in plays:
+            raise ValueError(f"{play_id}: stale play review; play no longer exists")
+        play = plays[play_id]
+        source = review.get("source")
+        keys = ("candidate_id", "detection_s", "primary_cam", "start_s", "end_s")
+        if not isinstance(source, dict) or any(k not in source or source[k] != play.get(k) for k in keys):
+            raise ValueError(f"{play_id}: stale play review; selected source changed")
+        play["review_status"] = review["status"]
+        play["review_reason"] = str(review.get("reason", ""))
+    goals = {g["id"]: g for g in reviewed.get("goals", [])}
+    goal_reviews = report.get("goals", {})
+    if not isinstance(goal_reviews, dict):
+        raise ValueError("invalid goal reviews")
+    for goal_id, review in goal_reviews.items():
+        if goal_id not in goals or not isinstance(review, dict) or review.get("status") != "keep":
+            raise ValueError(f"{goal_id}: invalid goal review")
+        goal = goals[goal_id]
+        candidate = goal.get("best_candidate") or {}
+        source = review.get("source")
+        expected = {"candidate_id": candidate.get("candidate_id"),
+                    "primary_cam": candidate.get("camera"), "detection_s": candidate.get("t")}
+        def same(a, b):
+            # Selection stores chosen.detection_s rounded to ms; best_candidate.t is not.
+            if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                return round(a, 3) == round(b, 3)
+            return a == b
+        if (not isinstance(source, dict) or any(v is None for v in expected.values())
+                or not all(same(source.get(k), v) for k, v in expected.items())):
+            raise ValueError(f"{goal_id}: stale goal review; candidate changed")
+        if goal.get("chosen") and not all(same(goal["chosen"].get(k), v) for k, v in expected.items()):
+            raise ValueError(f"{goal_id}: stale goal review; selected source changed")
+        moment = float(source["detection_s"])
+        goal["chosen"] = dict(source, start_s=moment - 6, end_s=moment + 4)
+        goal["review_status"] = "keep"
+        goal["status"] = "reviewed"
+        goal["cut"] = False
+        goal["flags"] = [f for f in goal.get("flags", []) if f not in ("goal moment ambiguous", "no clip found")]
+    return reviewed
+
+
 def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | None = None,
-               source_fps: dict | None = None, horizon: dict | None = None, start: str = "play") -> dict:
+               source_fps: dict | None = None, horizon: dict | None = None, start: str = "play",
+               closing_s: float = 0, opening_video: dict | None = None) -> dict:
+    """opening_video: a pre-rendered opening from probe_opening(). Its last frames
+    dissolve into the first play, so the stinger takes its length less the dissolve."""
     if start not in ("stinger", "cold_open", "play"):
         raise ValueError("start must be stinger, cold_open, or play")
     if not math.isfinite(speed) or not .25 <= speed <= 4:
         raise ValueError("live_play_speed must be between 0.25 and 4")
+    if not math.isfinite(closing_s) or closing_s not in (0, 5):
+        raise ValueError("closing_s must be 0 or 5")
+    closing_frames = round(closing_s * FPS)
     goals = selection.get("goals") or []
     chosen = [g for g in goals if g.get("chosen") and not g.get("cut")]
     # The tier follows the goals chosen before the fill: goals the fill later
     # restores from the cut list keep the same tier-based budgets.
-    before, after = (6., 3.) if len(chosen) <= 6 else (5., 2.) if len(chosen) <= 12 else (4., 0.)
+    automatic_count = sum(g.get("review_status") != "keep" for g in chosen)
+    before = 6. if automatic_count <= 6 else 5. if automatic_count <= 12 else 4.
+    after = 0.  # Keep goal action without an additional celebration hold.
     tier = 1 if len(chosen) <= 6 else 2 if len(chosen) <= 12 else 3
     clips, flags, replays = [], [], []
 
@@ -319,11 +393,12 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         """Build one replay shot, or flag and return None when it cannot be cut."""
         layout = layouts.get(clip["camera"], [])
         block = _containing_block(layout, clip["moment_s"]) or {}
-        # The bias centers on the scoring frame: the whistle detection leads the
-        # puck crossing, but a non-goal play has no such offset to correct for.
+        # Keep shot setup before the detected goal moment and a short outcome.
+        # Non-goal plays retain their centered replay window.
         center = clip["moment_s"] + (REPLAY_WINDOW_BIAS if clip.get("kind") == "goal" else 0.0)
-        a = max(center - src_d / 2, block.get("start", clip["moment_s"]))
-        b = min(center + src_d / 2, block.get("end", clip["moment_s"]))
+        a = max(block.get("start", clip["moment_s"]),
+                min(center - src_d / 2, block.get("end", clip["moment_s"]) - src_d))
+        b = min(a + src_d, block.get("end", clip["moment_s"]))
         if b - a < MIN_REPLAY_S:
             flags.append(f"{clip['goal_id']}: replay {kind} shot has no room in Recording"
                          " coverage; omitted")
@@ -388,6 +463,10 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
         play_id = play.get("id")
         if play_id in play_ids_added:
             return None
+        if play.get("review_status") in ("reject", "uncertain") or (
+                play.get("kind") == "net_play" and play.get("review_status") != "keep"):
+            flags.append(f"{play_id}: non-goal candidate requires a keep review; omitted")
+            return None
         cam = play.get("primary_cam")
         moment = _num(play.get("detection_s"), "detection_s", str(play_id))
         start = _num(play.get("start_s"), "start_s", str(play_id))
@@ -418,22 +497,18 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
     goal_frames = sum(math.ceil((c["end_s"] - c["start_s"]) / speed * FPS) for c in clips)
     total_frames = goal_frames + sum(r["frames"] for r in replays) + sum(
         math.ceil((c["end_s"] - c["start_s"]) / speed * FPS) for c in play_clips)
-    opening_budget = 75 + (180 if start == "cold_open" else 0) if start != "play" else 0
-    max_frames = MAX_FRAMES - opening_budget
+    stinger_frames = (opening_video["frames"] - opening_video["dissolve"] if opening_video
+                      else OPEN_STINGER_FRAMES)
+    opening_budget = stinger_frames + (180 if start == "cold_open" else 0) if start != "play" else 0
+    max_frames = MAX_FRAMES - opening_budget - closing_frames
     fill_target_frames = FILL_TARGET_S * FPS - opening_budget
     restored_ids: list[str] = []
     cut_pool = sorted(cut_goals, key=lambda g: -(g.get("interest") or 0.0))
     play_pool = list(selection.get("next_best") or [])
     play_i = 0
-    # Fill policy: restore cut goals first; a Next Best play preempts the next
-    # cut goal only when its score beats the goal's interest by a wide margin.
+    # Restore goals before considering reviewed non-goal plays.
     while total_frames < fill_target_frames and (cut_pool or play_i < len(play_pool)):
         take_goal = bool(cut_pool)
-        if take_goal and play_i < len(play_pool):
-            peek = plays_by_id.get(play_pool[play_i].get("id")) if isinstance(play_pool[play_i], dict) else None
-            if peek and not peek.get("chosen") and \
-                    (float(peek.get("score") or 0.0) - (cut_pool[0].get("interest") or 0.0)) >= FILL_PLAY_ADVANTAGE:
-                take_goal = False
         if take_goal:
             goal = cut_pool.pop(0)
             clip = goal_clip(goal)
@@ -537,9 +612,8 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
             flags.append(f"dropped {len(chosen_dropped)} chosen play(s) to fit the four-minute"
                          f" cap ({', '.join(chosen_dropped)})")
     if total > max_frames:
-        # Shorten the replay blocks next (spec 002 §5.8): wide shots, then tight ones,
-        # latest goals first. Dead goals are already gone, so no replay is dropped for
-        # a goal that will not render.
+        # Drop ordinary replays before best-goal replays, latest goals first.
+        # Do not retain a replay for a goal that will not render.
         dropped, dropped_ids = 0, []
         # The best goals keep the full treatment as long as anything else can go:
         # their shots rank behind every other replay in the drop order.
@@ -587,11 +661,16 @@ def plan_recap(selection: dict, layouts: dict, speed: float = 1.1, rois: dict | 
             clip["opening_interest"] = interests.get(clip["goal_id"], clip.get("play_score", 0))
         opening.append(_cold_open(clips))
     if start != "play":
-        opening.append({"kind": "stinger", "goal_id": "open", "frames": 75, "speed": 1,
+        opening.append({"kind": "stinger", "goal_id": "open", "frames": stinger_frames, "speed": 1,
                         "start_s": clips[0]["start_s"], "moment_s": clips[0]["start_s"], "parts": []})
-    duration = sum(c["frames"] for c in opening + clips + replays) / FPS
+        if opening_video:
+            opening[-1]["opening_video"] = dict(opening_video)
+    closing = ([{"kind": "final", "goal_id": "close", "frames": closing_frames, "speed": 1,
+                 "start_s": 0, "moment_s": 0, "parts": []}] if closing_frames else [])
+    duration = sum(c["frames"] for c in opening + clips + replays + closing) / FPS
     return {"schema_version": 3, "speed": speed, "fps": FPS, "audio": "silent",
-            "duration_s": duration, "clips": clips, "replays": replays, "opening": opening, "start": start,
+            "duration_s": duration, "clips": clips, "replays": replays, "opening": opening,
+            "closing": closing, "start": start,
             "input_flags": selection.get("flags", []),
             "flags": flags + ["plain Recap: no graphics or audio mix"]}
 
@@ -684,7 +763,7 @@ def verify_sources(plan: dict) -> None:
     if plan.get("start") == "cold_open":
         opening = [_cold_open(kept)] + [e for e in opening if e["kind"] == "stinger"]
     plan["opening"] = opening
-    plan["duration_s"] = sum(e["frames"] for e in opening + kept + replays) / FPS
+    plan["duration_s"] = sum(e["frames"] for e in opening + kept + replays + plan.get("closing", [])) / FPS
 
 
 def _zoompan_filter(zoom: dict, m: int, fps: int, angle_deg: float = 0.0) -> str:
@@ -789,12 +868,35 @@ def _rife_slowmo(source: Path, dest: Path, work: Path, entry: dict,
                     str(dest)], check=True)
 
 
+X264 = ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-color_primaries", "bt709", "-colorspace", "bt709", "-color_trc", "bt709"]
+
+
+def _encode_opening(entry: dict, dest: Path) -> None:
+    """The opening up to its dissolve; the rest is blended into the next piece."""
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", entry["opening_video"]["path"],
+                    "-an", "-vf", f"fps={FPS},format=yuv420p", "-frames:v", str(entry["frames"]),
+                    *X264, str(dest)], check=True)
+
+
+def _dissolve_in(stinger: dict, dest: Path, temporary: Path) -> None:
+    """Blend the opening's last frames over the first frames of dest. dest keeps its length."""
+    video = stinger["opening_video"]
+    filters = (f"[0:v]trim=start_frame={stinger['frames']},setpts=PTS-STARTPTS,fps={FPS},settb=1/{FPS},"
+               f"format=yuv420p[a];[1:v]setpts=PTS-STARTPTS,fps={FPS},settb=1/{FPS},format=yuv420p[b];"
+               f"[a][b]xfade=transition=fade:duration={video['dissolve'] / FPS:.6f}:offset=0[v]")
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", video["path"], "-i", str(dest),
+                    "-filter_complex", filters, "-map", "[v]", "-an", *X264, str(temporary)], check=True)
+    temporary.replace(dest)
+
+
 def recap_sequence(plan: dict) -> list[dict]:
     """Use one piece order for video, audio, and graphics."""
     sequence = list(plan.get("opening") or [])
     for clip in plan.get("clips") or []:
         sequence.append(clip)
         sequence.extend(r for r in plan.get("replays") or [] if r.get("goal_id") == clip.get("goal_id"))
+    sequence.extend(plan.get("closing") or [])
     return sequence
 
 
@@ -804,9 +906,12 @@ def render(plan: dict, output: Path) -> None:
         work = Path(scratch)
         sequence = recap_sequence(plan)
         pieces = []
+        dissolve_from = None
         for i, entry in enumerate(sequence):
             dest = work / f"clip-{i:04d}.mp4"
-            if entry.get("kind") == "stinger":
+            if entry.get("opening_video"):
+                _encode_opening(entry, dest)
+            elif entry.get("kind") in ("stinger", "final"):
                 subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
                                 "-i", f"color=c=black:s=1920x1080:r={FPS}", "-an",
                                 "-frames:v", str(entry["frames"]), "-c:v", "libx264", "-preset", "fast",
@@ -828,6 +933,9 @@ def render(plan: dict, output: Path) -> None:
                     _encode(entry, dest, speed=entry["speed"], frames=entry["frames"])
             else:
                 _encode(entry, dest, speed=entry["speed"], frames=entry["frames"])
+            if dissolve_from is not None:
+                _dissolve_in(dissolve_from, dest, work / f"dissolve-{i:04d}.mp4")
+            dissolve_from = entry if entry.get("opening_video") else None
             pieces.append(dest)
             print(f"[assembly] rendered {i + 1}/{len(sequence)}", flush=True)
         manifest = work / "clips.txt"
@@ -857,7 +965,7 @@ def main(argv=None):
     root = args.game_folder.resolve()
     try:
         options = json.loads(args.options)
-        selection = json.loads((root / "selection.json").read_text())
+        selection = load_play_reviews(root, json.loads((root / "selection.json").read_text()))
         sheet = json.loads((root / "game_sheet.json").read_text())
         name = output_name(root, options, sheet)
         cameras = {g["chosen"]["primary_cam"] for g in selection["goals"] if g.get("chosen")}
@@ -878,9 +986,15 @@ def main(argv=None):
             if angle:
                 probe_flags.append(f"{cam}: horizon levelled by {-angle:+.1f} degrees")
             horizon[cam] = angle
+        opening_video = None
+        if options.get("opening") and options.get("start", "stinger") != "play":
+            try:
+                opening_video = probe_opening(options["opening"])
+            except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+                probe_flags.append(f"opening video unusable ({exc}); using the graphics stinger")
         plan = plan_recap(selection, layouts, float(options.get("live_play_speed", 1.1)),
                           rois=rois, source_fps=source_fps, horizon=horizon,
-                          start=options.get("start", "stinger"))
+                          start=options.get("start", "stinger"), closing_s=5, opening_video=opening_video)
         plan["flags"] = probe_flags + plan["flags"]
         plan["output"] = name
         verify_sources(plan)

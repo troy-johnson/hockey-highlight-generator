@@ -20,7 +20,7 @@ that file for each camera.
 
 Method (approved in hhg-3r5.30):
   * Break candidate: a run of seconds where the loudest camera's audio
-    activity rank is below 0.15 (gaps up to 5 s joined, 25 s or more). Score =
+    activity rank is below 0.3 (gaps up to 5 s joined, 25 s or more). Score =
     half quiet length (full at 60 s), half net flow (median flow in the run
     against the game median, at the camera with the most flow; low is good).
   * Breaks: the set of (periods - 1) candidates with the best score, with
@@ -33,7 +33,9 @@ Method (approved in hhg-3r5.30):
     or more.
   * Game end: the start of the first quiet run (activity below 0.3, 40 s or
     more, or up to the end of the last Recording) after the last break plus
-    0.6 x the mean length of the earlier periods.
+    0.6 x the mean length of the earlier periods. Stop-clock rules also
+    require the full scheduled play duration plus the selected break durations.
+    Missing breaks make the game end uncertain.
   * Goalie net swap (optional ML stack): evidence only. A confident "same
     goalie" result flags the break; it does not choose breaks.
   * Coverage: each camera's Recording spans inside each period. The
@@ -59,7 +61,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "v2", "scripts"))
 TIMELINE = "detection (cam1 concat time; cam2 moved by the sync offset)"
 
 SETTINGS = {
-    "break": {"quiet_below": 0.15, "merge_s": 5, "min_s": 25, "full_quiet_s": 60,
+    "break": {"quiet_below": 0.3, "merge_s": 5, "min_s": 25, "full_quiet_s": 60,
               "flow_good": 0.4, "flow_bad": 0.8, "max_candidates": 20},
     "plan": {"default_periods": 3, "min_period_frac": 0.4, "imbalance_weight": 1.0,
              "min_period_whistles": 3, "min_period_whistle_frac": 0.25,
@@ -290,7 +292,11 @@ def _evaluate(combo: tuple[dict, ...], start: float, act_max: np.ndarray, signal
         starts.append(f if f is not None else c["end"])
     prev = [e - s for s, e in zip(starts, ends)]
     mean_prev = float(np.mean(prev)) if prev else 600.0 / SETTINGS["end"]["after_frac"]
-    end = game_end(act_max, starts[-1] + SETTINGS["end"]["after_frac"] * mean_prev, signal_end, whistles)
+    after = starts[-1] + SETTINGS["end"]["after_frac"] * mean_prev
+    if timing["clock"] == "stop" and timing["period_s"]:
+        after = max(after, start + timing["periods"] * timing["period_s"]
+                    + sum(c["end"] - c["start"] for c in combo))
+    end = game_end(act_max, after, signal_end, whistles)
     ends.append(end["t"])
     lengths = [e - s for s, e in zip(starts, ends)]
     if any(L <= 0 for L in lengths):
@@ -339,11 +345,17 @@ def plan_periods(cands: list[dict], start: float, act_max: np.ndarray, signal_en
             best = max(evals, key=lambda x: x[1]["total"])
             break
     if best is None:
-        end = game_end(act_max, start + 600, signal_end, whistles)
+        after = start + 600
+        if timing["clock"] == "stop" and timing["period_s"]:
+            after = max(after, start + timing["periods"] * timing["period_s"])
+        end = game_end(act_max, after, signal_end, whistles)
+        if n_breaks > 0:
+            end["uncertain"] = True
         return {"periods": [{"n": 1, "start": start, "end": end["t"], "break_before": None}], "end": end,
                 "flags": ["no period structure found; the whole game is one period"]}
     if used_n < n_breaks:
         flags.append(f"found {used_n} of {n_breaks} breaks; check the period starts")
+        best[1]["end"]["uncertain"] = True
     combo, ev = best
     ucfg = cfg["uncertain"]
     lengths = ev["lengths"]

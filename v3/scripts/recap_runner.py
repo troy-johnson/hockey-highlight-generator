@@ -370,6 +370,7 @@ def _fp_scoresheet(ctx):
     from scoresheet import find_scoresheet_pdfs, find_scoresheet_photos
     root = str(ctx.game_folder)
     return {"sheets": [file_identity(p) for p in find_scoresheet_pdfs(root) + find_scoresheet_photos(root)[:1]],
+            "overrides": _file_hash(ctx.game_folder / "game_sheet_overrides.json"),
             "scripts": [_file_hash(HERE / n) for n in ("scoresheet.py", "gamesheet_pdf.py")]}
 
 
@@ -592,7 +593,24 @@ def assembly_options(ctx):
     team = (ctx.options.get("teams") or {}).get(options.get("focus_team"), {})
     if team.get("name"):
         options["focus_team"] = team["name"]
+    opening = opening_video(ctx.options, team)
+    if opening:
+        options["opening"] = opening
     return options
+
+
+def opening_video(options: dict, team: dict) -> str | None:
+    """The Focus Team's pre-rendered opening: "opening" in its kit, else in its Team Config.
+    A relative path is relative to the config folder, like logos."""
+    kit = (team.get("kits") or {}).get(options.get("kit")) or {}
+    value = kit.get("opening") if isinstance(kit, dict) else None
+    value = value or team.get("opening")
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path((options.get("_layers") or {}).get("config_dir") or Path.home() / "hockey").expanduser() / path
+    return str(path)
 
 
 def assembly_outputs(ctx):
@@ -609,11 +627,13 @@ def _rife_ready_cheap() -> bool:
 
 
 def _fp_assembly(ctx):
+    options = assembly_options(ctx)
     return {"inputs": {n: _file_hash(ctx.game_folder / n) for n in
-                       ("selection.json", "game_sheet.json", "cam1_concat.txt", "cam2_concat.txt",
+                       ("selection.json", "play_review.json", "game_sheet.json", "cam1_concat.txt", "cam2_concat.txt",
                         "rois.json", "rois_auto.json")},
             "files": [file_identity(p) for p in camera_files(ctx.game_folder)],
-            "options": assembly_options(ctx),
+            "options": options,
+            "opening": file_identity(options["opening"]) if "opening" in options else None,
             "rife": _rife_ready_cheap(),
             "scripts": [_file_hash(HERE / n) for n in ("recap_assembly.py", "coverage.py", "recap_options.py")]
                        + [_file_hash(V2 / "signals.py")]}
@@ -644,7 +664,8 @@ def mix_options(ctx) -> dict:
     return {"perspective": ctx.options.get("perspective", "neutral"),
             "focus_team": team.get("name") or focus,
             "comic_calls": list(ctx.options.get("comic_calls") or []),
-            "audio": dict(ctx.options.get("audio") or {})}
+            "audio": dict(ctx.options.get("audio") or {}),
+            "period_transitions": ctx.options.get("period_transitions") is True}
 
 
 def _mix_manifest_path(ctx) -> Path:
@@ -675,7 +696,8 @@ def _fp_mix(ctx):
     root = ctx.game_folder
     video = _mix_plan_output(ctx)
     inputs: dict = {name: _file_hash(root / name) for name in
-                    ("recap_assembly.json", "music_spans.json", "selection.json", "game_sheet.json")}
+                    ("recap_assembly.json", "music_spans.json", "selection.json", "game_sheet.json",
+                     "audio_signals.json", "play_review.json")}
     inputs[video] = file_identity(root / video)     # the plain Recap: identity, not a full hash
     return {"inputs": inputs,
             "manifest": file_identity(_mix_manifest_path(ctx)),
@@ -698,7 +720,7 @@ def _run_mix(ctx):
 
 def graphics_options(ctx) -> dict:
     return json.loads(json.dumps({k: ctx.options.get(k) for k in
-                                 ("teams", "focus_team", "perspective", "start", "_layers")}))
+                                  ("teams", "focus_team", "perspective", "kit", "start", "date", "_layers")}))
 
 
 def _graphics_outputs(ctx):
@@ -711,14 +733,18 @@ def _fp_graphics(ctx):
     root = ctx.game_folder
     video = _mix_outputs(ctx)[1]
     inputs: dict = {name: _file_hash(root / name) for name in
-              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_sheet.json")}
+              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_sheet.json", "play_review.json")}
     inputs[video] = file_identity(root / video)
     options = graphics_options(ctx)
     logos = {}
     for key, team in (options.get("teams") or {}).items():
-        if team.get("logo"):
-            logos[key] = _file_hash(logo_path(team["logo"], options))
-    sources = [HERE / "recap_graphics.py", HERE / "audio_mix.py", PACKAGE / "render.mjs",
+        for asset in ("logo", "wordmark", "lockup", "crest"):
+            if team.get(asset):
+                logos[f"{key}:{asset}"] = _file_hash(logo_path(team[asset], options))
+        for kit, values in (team.get("kits") or {}).items():
+            if isinstance(values, dict) and values.get("crest"):
+                logos[f"{key}:kit:{kit}:crest"] = _file_hash(logo_path(values["crest"], options))
+    sources = [HERE / "recap_graphics.py", HERE / "audio_mix.py", HERE / "recap_assembly.py", PACKAGE / "render.mjs",
                PACKAGE / "package.json", PACKAGE / "package-lock.json"]
     sources.extend(sorted((PACKAGE / "src").glob("*")))
     sources.extend(sorted((PACKAGE / "public").glob("*")))
@@ -738,6 +764,58 @@ def _run_graphics(ctx):
     rc, lines = ctx.run_cmd(argv, on_line)
     if rc:
         return StageResult("failed", [f"graphics failed: {_last_error(lines)}"], _last_error(lines))
+    return StageResult("flagged" if flags else "done", flags, summary[0])
+
+
+def short_options(ctx):
+    options = assembly_options(ctx)
+    options.update(graphics_options(ctx))
+    options["audio"] = mix_options(ctx).get("audio")
+    return options
+
+
+def _short_outputs(ctx):
+    try:
+        plan = json.loads((ctx.game_folder / "short_assembly.json").read_text())
+    except (OSError, ValueError):
+        plan = {}
+    return ["short_assembly.json", "short_audio.json"] + plan.get("outputs", [])
+
+
+def _fp_short(ctx):
+    from recap_assembly import rife_ready
+    root = ctx.game_folder
+    manifest = _mix_manifest_path(ctx)
+    media = {}
+    try:
+        data = json.loads(manifest.read_text())
+        for item in data.get("beds", []) + data.get("cues", []):
+            media[item["file"]] = _file_hash(manifest.parent / item["file"])
+            proof = (item.get("provenance") or {}).get("proof")
+            if proof:
+                media[proof] = _file_hash(manifest.parent / proof)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return {"inputs": {name: _file_hash(root / name) for name in
+                       ("selection.json", "play_review.json", "game_sheet.json", "music_spans.json", "rois.json", "rois_auto.json",
+                         "cam1_concat.txt", "cam2_concat.txt", "chapters.json", "coverage.json")},
+            "files": [file_identity(p) for p in camera_files(root)], "options": short_options(ctx),
+            "manifest": _file_hash(manifest), "media": media, "rife_ready": rife_ready(),
+            "scripts": {name: _file_hash(HERE / name) for name in
+                         ("short_clips.py", "recap_assembly.py", "audio_mix.py", "cue_library.py", "recap_graphics.py", "selection.py")}}
+
+
+def _run_short(ctx):
+    flags, summary = [], [""]
+    def on_line(line):
+        if line.startswith("[short] flag: "):
+            flags.append(line.removeprefix("[short] flag: "))
+        elif line.startswith("[short] "):
+            summary[0] = line.removeprefix("[short] ")
+    rc, lines = ctx.run_cmd([ctx.python, str(HERE / "short_clips.py"), str(ctx.game_folder),
+                             "--options", json.dumps(short_options(ctx))], on_line)
+    if rc:
+        return StageResult("failed", [f"Short failed: {_last_error(lines)}"], _last_error(lines))
     return StageResult("flagged" if flags else "done", flags, summary[0])
 
 
@@ -767,6 +845,8 @@ STAGES: list[Stage] = [
           needs=("assembly",)),
     Stage("graphics", "Overlay Recap graphics", _fp_graphics, _graphics_outputs, _run_graphics,
           needs=("mix",)),
+    Stage("short", "Render Short and single-goal clips", _fp_short, _short_outputs, _run_short,
+          needs=("selection",)),
 ]
 
 STAGE_NAMES = [s.name for s in STAGES]

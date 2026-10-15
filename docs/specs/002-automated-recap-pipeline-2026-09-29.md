@@ -158,7 +158,7 @@ For example, a 13-minute stop-clock League uses:
 ### 5.8 Recap edit grammar (`hhg-3r5.11`, `hhg-3r5.1`)
 
 **Open**
-- The default is a 2–3 s Focus Team 3D stinger.
+- The default is a 4.9 s (148-frame) Focus Team 3D stinger that dissolves into the first play (spec 003). A Short has no stinger.
 - The options are a cold open on the best play, or start on play.
 
 **Period change**
@@ -203,7 +203,8 @@ The 2–3 best goals always get the full treatment.
 - GOAL, penalty, period, and FINAL cards
 
 **Stingers (3D, three.js via @remotion/three)**
-- **Open:** a slab hockey-stops over a 3D regulation rink, with the ICEPAK/HOCKEY lockup and frost.
+- **Open:** the Black Ice opening, pre-rendered in Blender (`v3/blender/black_ice_macro.py`), with the Remotion matchup rail over its end.
+  Fallback without a pre-rendered opening: a slab hockey-stops over a 3D regulation rink, with the ICEPAK/HOCKEY lockup and frost.
 - **Period:** snow on the lens over the footage, with the crest.
 
 **Quality rules**

@@ -1,25 +1,43 @@
 import React from 'react';
-import {AbsoluteFill, Easing, Img, interpolate, Sequence, staticFile, useCurrentFrame} from 'remotion';
-import {Stinger} from './Stingers';
+import {AbsoluteFill, Easing, Img, Sequence, staticFile, useCurrentFrame} from 'remotion';
+import {OpeningRail, Stinger} from './Stingers';
+import {SkateCutAccent} from './SkateCutAccent';
+import {EventRail} from './EventRail';
+import {FrostPane, PeriodRail} from './FrostPane';
+import {FinalCard} from './FinalCard';
 
-// Variant D: skewed slabs, semantic colors, and mirrored team tiles.
+// Rectangular plates keep the text and team cells aligned.
 const white = '#FFFFFF';
-const Slab = ({children, style}) => <div style={{display: 'flex', width: 'fit-content',
-  transform: 'skewX(-16deg)', outline: `3px solid ${white}`,
-  boxShadow: '0 10px 30px rgba(0,0,0,.45)', ...style}}>{children}</div>;
+const Slab = ({children, style, cutDelay = 0}) => <div style={{display: 'flex', width: 'fit-content',
+  position: 'relative',
+  outline: `3px solid ${white}`,
+  boxShadow: '0 10px 30px rgba(0,0,0,.45)', ...style}}>{children}<SkateCutAccent delay={cutDelay}/></div>;
 const Cell = ({bg, w, h = 70, children, style}) => <div style={{background: bg,
   width: w, height: h, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  flexShrink: 0, overflow: 'hidden', ...style}}><div style={{transform: 'skewX(16deg)',
+  flexShrink: 0, overflow: 'hidden', ...style}}><div style={{
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12}}>{children}</div></div>;
-const Edge = ({team, h = 70}) => <div style={{width: 12, height: h, background: team.secondary}}/>;
-const TeamChip = ({team, h = 70, size = 30, mirror = false}) => {
-  const logo = team.logo ? <Img key="logo" src={staticFile(team.logo)} style={{width: h - 12,
-    height: h - 12, objectFit: 'contain'}}/> : null;
+const Edge = ({team, h = 70, w = 12}) => <div style={{width: w, height: h, background: team.secondary}}/>;
+const TeamChip = ({team, h = 70, logoH = h - 12, pad = 18, size = 30, mirror = false}) => {
+  const logo = team.logo ? <Img key="logo" src={staticFile(team.logo)} style={{width: logoH,
+    height: logoH, objectFit: 'contain'}}/> : null;
   const name = <span key="name" style={{fontSize: size, fontWeight: 900, fontStyle: 'italic',
     letterSpacing: 1, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{team.acronym}</span>;
-  return <Cell bg={team.primary} h={h} style={{padding: '0 22px'}}>{mirror ? [name, logo] : [logo, name]}</Cell>;
+  return <Cell bg="#19212A" h={h} style={{padding: `0 ${pad}px`,
+    borderBottom: `3px solid ${team.line ?? team.primary}`, boxSizing: 'border-box'}}>{mirror ? [name, logo] : [logo, name]}</Cell>;
 };
-const periodLabel = n => n > 3 ? 'OT' : `P${n}`;
+// A score change is carved: a blade scratch crosses the score cell, then fades.
+const Carve = ({frame, color}) => {
+  const draw = Easing.out(Easing.cubic)(Math.max(0, Math.min(1, (frame - 1) / 7)));
+  const fade = Math.max(0, Math.min(1, 1 - (frame - 14) / 12));
+  return <svg viewBox="0 0 64 56" style={{position: 'absolute', inset: 0, overflow: 'visible',
+    pointerEvents: 'none', opacity: fade, filter: `drop-shadow(0 0 3px ${color})`}}>
+    {[0, 5].map(o => <path key={o} d={`M-4 ${48 - o} Q30 ${30 - o} 68 ${10 - o}`} fill="none"
+      stroke={o ? color : '#FFFFFF'} strokeWidth={o ? 1.5 : 2.2} strokeLinecap="round"
+      pathLength={1} strokeDasharray={1} strokeDashoffset={1 - draw}/>)}
+  </svg>;
+};
+const periodLabel = n => String(n).toUpperCase() === 'SO' ? 'SO' :
+  ({1: '1st', 2: '2nd', 3: '3rd'}[n] || 'OT');
 
 const ScoreSlab = ({data, teams, tokens, label, h = 70, stateWidth = 104, pop = 0}) =>
   <Slab><Edge team={teams.home} h={h}/><TeamChip team={teams.home} h={h} size={h === 90 ? 38 : 30}/>
@@ -30,11 +48,85 @@ const ScoreSlab = ({data, teams, tokens, label, h = 70, stateWidth = 104, pop = 
       color: '#0A0A0A', transform: `scale(${1 + pop * .35})`}}>{data.score[1]}</b></Cell>
     <TeamChip team={teams.away} h={h} size={h === 90 ? 38 : 30} mirror/><Edge team={teams.away} h={h}/></Slab>;
 
-const Bug = ({data, teams, tokens, changed}) => {
+const Bug = ({data, teams, tokens, previousScore, previousPeriod, replay, vertical}) => {
+  const accent = tokens?.accent ?? '#7FD3F0';
   const f = useCurrentFrame();
-  const pop = changed ? Math.max(0, 1 - Math.abs(f - 6) / 10) : 0;
-  return <div style={{position: 'absolute', left: 76, top: 44}}>
-    <ScoreSlab {...{data, teams, tokens}} label={periodLabel(data.period)} pop={pop}/>
+  const roll = Easing.out(Easing.cubic)(Math.max(0, Math.min(1, f / 10)));
+  const enter = previousScore || data.initiallyVisible ? 1 : Easing.out(Easing.cubic)(Math.max(0, Math.min(1, f / 12)));
+  const flash = (i, scoreCell = false) => {
+    const scored = previousScore && data.score[i] > previousScore[i];
+    const strength = scored ? Math.max(0, Math.min(1, (30 - f) / 12)) : 0;
+    const primary = teams[i === 0 ? 'home' : 'away'].primary;
+    const rgb = [1, 3, 5].map(n => {
+      const channel = parseInt(primary.slice(n, n + 2), 16);
+      return scoreCell ? channel * .9 + 255 * .1 : channel;
+    });
+    const base = scoreCell ? [35, 43, 52] : [20, 27, 35];
+    const displayed = rgb.map((v, j) => Math.round(v * strength + base[j] * (1 - strength)));
+    const linear = displayed.map(v => {
+      const s = v / 255;
+      return s <= .04045 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4;
+    });
+    const luminance = linear[0] * .2126 + linear[1] * .7152 + linear[2] * .0722;
+    return {background: scoreCell ? `rgb(${displayed.join(',')})` : `rgba(${rgb.join(',')},${strength})`,
+      color: luminance > .179 ? '#0A0A0A' : '#EEF3F6'};
+  };
+  const number = i => {
+    const changed = previousScore && previousScore[i] !== data.score[i];
+    return <div style={{width: 64, height: 56, overflow: 'hidden', position: 'relative',
+      ...flash(i, true), fontSize: 36, fontWeight: 800, fontVariantNumeric: 'tabular-nums'}}>
+      <div style={{transform: changed ? `translateY(${-roll * 56}px)` : undefined}}>
+        {(changed ? [previousScore[i], data.score[i]] : [data.score[i]]).map((value, j) =>
+          <div key={j} style={{height: 56, display: 'flex', justifyContent: 'center',
+            alignItems: 'center'}}>{value}</div>)}
+      </div>
+      {changed && data.score[i] > previousScore[i] && <Carve frame={f}
+        color={teams[i === 0 ? 'home' : 'away'].line ?? '#EEF3F6'}/>}
+      {changed && data.score[i] < previousScore[i] && <div style={{position: 'absolute',
+        bottom: 0, height: 3, width: '100%', background: '#EEF3F6',
+        opacity: Math.max(0, 1 - f / 18)}}/>}
+    </div>;
+  };
+  const periodCell = () => {
+    // A new period rolls in and flashes generic ice-white, like a score change; it is not team-specific.
+    const changed = previousPeriod != null && previousPeriod !== data.period;
+    const strength = changed ? Math.max(0, Math.min(1, (30 - f) / 12)) : 0;
+    const labels = changed ? [periodLabel(previousPeriod), periodLabel(data.period)] : [periodLabel(data.period)];
+    return <div style={{width: 98, height: 56, overflow: 'hidden', position: 'relative',
+      background: `rgba(238,243,246,${strength})`, fontSize: 22, fontWeight: 650,
+      color: strength > .35 ? '#0A0A0A' : '#9FB2C1'}}>
+      <div style={{transform: changed ? `translateY(${-roll * 56}px)` : undefined}}>
+        {labels.map((label, j) => <div key={j} style={{height: 56, display: 'flex',
+          justifyContent: 'center', alignItems: 'center'}}>{label}</div>)}
+      </div>
+    </div>;
+  };
+  const chip = side => <div style={{height: 56, width: 154, position: 'relative',
+    display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 14, boxSizing: 'border-box',
+    ...flash(side === 'home' ? 0 : 1)}}>
+    {teams[side].logo && <Img src={staticFile(teams[side].logo)} style={{width: 36,
+      height: 36, objectFit: 'contain'}}/>}
+    <span style={{fontSize: Math.min(24, (teams[side].logo ? 86 : 126) /
+      Math.max(1, teams[side].acronym.length * .8)), fontWeight: 750, letterSpacing: .5,
+      whiteSpace: 'nowrap'}}>{teams[side].acronym}</span>
+    <div style={{position: 'absolute', bottom: 0, left: 0, right: 0, borderBottom: `3px solid ${teams[side].line ?? teams[side].primary}`,
+      boxSizing: 'border-box', pointerEvents: 'none'}}/>
+  </div>;
+  return <div style={{position: 'absolute', zIndex: 10, left: vertical ? (1080 - 535 * 1.3) / 2 : 96,
+    top: vertical ? 220 : 54, color: '#EEF3F6', transformOrigin: 'top left',
+    opacity: enter, transform: `translateY(${(1 - enter) * -6}px) scale(${vertical ? 1.3 : 1})`,
+    filter: 'drop-shadow(0 5px 12px rgba(0,0,0,.4))'}}>
+    <div style={{display: 'flex', height: 56, background: 'linear-gradient(#19212A, #0E1319)',
+      borderTop: '1px solid rgba(238,243,246,.32)', boxSizing: 'border-box'}}>
+      {chip('home')}{number(0)}
+      <div style={{width: 1, background: 'rgba(238,243,246,.15)'}}/>
+      {chip('away')}{number(1)}
+      {periodCell()}
+    </div>
+    {replay && <div style={{position: 'absolute', top: 56, right: 0, width: 98,
+      height: 27, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: '#0E1319', borderBottom: `2px solid ${accent}`, fontSize: 15,
+      letterSpacing: 1.5, fontWeight: 700}}>REPLAY</div>}
   </div>;
 };
 
@@ -42,51 +134,11 @@ const Motion = ({duration, children, style, delay = 0, drop = false}) => {
   delay = Math.min(delay, Math.floor(duration / 3));
   const f = useCurrentFrame() - delay;
   duration -= delay;
-  const enter = Math.max(0, Math.min(1, (f + 1) / Math.min(16, duration / 3)));
-  const exit = Math.min(1, (duration - f) / Math.min(10, duration / 3));
+  const enter = Easing.out(Easing.cubic)(Math.max(0, Math.min(1, f / Math.min(18, duration / 3))));
+  const exit = Easing.out(Easing.cubic)(Math.max(0, Math.min(1, (duration - f) / Math.min(14, duration / 3))));
   const reveal = enter * exit;
   return <div style={{clipPath: drop ? `inset(-90px -90px calc(${(1 - reveal) * 115}% - ${reveal * 90}px) -90px)` :
     `inset(-90px calc(${(1 - reveal) * 115}% - ${reveal * 90}px) -90px -90px)`, ...style}}>{children}</div>;
-};
-
-const Goal = ({data, teams, tokens, duration, compact}) => {
-  const team = teams[data.team];
-  const f = useCurrentFrame();
-  const word = interpolate(f, [8, 26], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.back(1.3))});
-  if (compact) return <Motion duration={duration} style={{position: 'absolute', left: 76, top: 160}}>
-    <Slab><Edge team={team}/><TeamChip team={team}/>
-      <Cell bg={tokens.hero} w={170}><b style={{fontSize: 42, fontStyle: 'italic', color: '#0A0A0A'}}>GOAL</b></Cell>
-      <Cell bg={tokens.info} style={{padding: '0 30px'}}><b style={{fontSize: 30}}>{data.num} {data.scorer}</b></Cell>
-      <Edge team={team}/></Slab>
-  </Motion>;
-  const h = 128;
-  return <Motion duration={duration} style={{position: 'absolute', left: 86, top: 160}}>
-    <Slab><Edge team={team} h={h}/><TeamChip team={team} h={h} size={48}/>
-      <Cell bg={tokens.hero} h={h} w={500}><b style={{fontSize: 112,
-        fontWeight: 900, fontStyle: 'italic', letterSpacing: 4, color: '#0A0A0A', opacity: word,
-        transform: `translateX(${(1 - word) * 120}px) scale(${.85 + .15 * word})`}}>GOAL</b></Cell>
-      <Edge team={team} h={h}/></Slab>
-    <Motion duration={duration} delay={18} drop><Slab style={{marginLeft: 150, marginTop: 10}}>
-      <Cell bg={team.primary} h={62} w={80}><b style={{fontSize: 32}}>{data.num}</b></Cell>
-      <Cell bg={tokens.info} h={62} style={{padding: '0 30px', maxWidth: 1350}}>
-        <b style={{fontSize: 32}}>{data.scorer}</b>
-        <b style={{fontSize: 22, color: tokens.label}}>{data.type}</b>
-        <b style={{fontSize: 22, color: tokens.label}}>{data.assists.length ? 'ASSISTS:' : 'UNASSISTED'}</b>
-        <span style={{fontSize: 24}}>{data.assists.join(', ')}</span>
-      </Cell></Slab></Motion>
-  </Motion>;
-};
-
-const Penalty = ({data, teams, tokens, duration}) => {
-  const team = teams[data.team];
-  return <Motion duration={duration} style={{position: 'absolute', left: 76, top: 160}}>
-    <Slab><Cell bg={team.primary} w={96}><b style={{fontSize: 40}}>{data.num}</b></Cell>
-      <Cell bg={tokens.info} style={{padding: '0 34px'}}><b style={{fontSize: 34}}>{data.name}</b></Cell>
-      <Cell bg={tokens.state} w={150}><b style={{fontSize: 36}}>{/^\d+$/.test(String(data.minutes)) ? `${data.minutes}:00` : data.minutes}</b></Cell>
-      <Cell bg={tokens.info} style={{padding: '0 34px'}}><b style={{fontSize: 28}}>{data.infraction}</b></Cell>
-      <TeamChip team={team}/><Edge team={team}/></Slab>
-  </Motion>;
 };
 
 const Particles = ({teams}) => {
@@ -101,60 +153,78 @@ const Particles = ({teams}) => {
 };
 
 const Period = ({data, teams, tokens, duration}) => <Motion duration={duration}
-  style={{position: 'absolute', left: 0, bottom: 90, width: 1920, display: 'flex', justifyContent: 'center'}}>
-  <ScoreSlab {...{data, teams, tokens}} stateWidth={240} label={data.period > 3 ? 'OVERTIME' : `PERIOD ${data.period}`}/>
+  style={{position: 'absolute', left: 0, bottom: 96, width: 1920, display: 'flex', justifyContent: 'center'}}>
+  <ScoreSlab {...{data, teams, tokens}} h={76} stateWidth={240} label={periodLabel(data.period) === 'SO' ?
+    'SHOOTOUT' : periodLabel(data.period) === 'OT' ? 'OVERTIME' : `${periodLabel(data.period)} PERIOD`}/>
 </Motion>;
 
-const FinalTable = ({team, table, tokens}) => {
-  const rowHeight = Math.min(46, 650 / Math.max(1, table.skaters.length + table.goalies.length + 3));
-  const size = Math.min(28, rowHeight * .65);
-  return <div style={{width: 840, background: tokens.info, padding: '18px 24px', boxSizing: 'border-box'}}>
-    <div style={{background: team.primary, borderLeft: `12px solid ${team.secondary}`, padding: '10px 20px',
-      fontSize: 32, fontWeight: 900, marginBottom: 12}}>{team.name}</div>
-    <table style={{width: '100%', borderCollapse: 'collapse', fontSize: size, fontVariantNumeric: 'tabular-nums'}}>
-      <thead style={{color: tokens.label}}><tr>{['#', 'PLAYER', 'G', 'A', 'PTS', 'PIM'].map(t => <th key={t}
-        style={{textAlign: t === 'PLAYER' ? 'left' : 'center', height: rowHeight}}>{t}</th>)}</tr></thead>
-      <tbody>{table.skaters.map((p, i) => <tr key={p.num} style={{background: i % 2 ? '#1C1C1C' : 'transparent', height: rowHeight}}>
-        {[p.num, p.name, p.g, p.a, p.pts, p.pim ?? '—'].map((v, j) => <td key={j} style={{textAlign: j === 1 ? 'left' : 'center',
-          maxWidth: j === 1 ? 360 : undefined, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'}}>{v}</td>)}</tr>)}</tbody>
-    </table>
-    {table.goalies.length ? table.goalies.map(p => <div key={p.num} style={{fontSize: size, paddingTop: 12}}>
-      {p.num} {p.name} <b style={{color: tokens.label}}>SAVES</b> {p.saves}</div>) :
-      <div style={{fontSize: 22, color: '#D9D9D9', paddingTop: 12}}>Goalie saves unavailable</div>}
-  </div>;
-};
-
-const Final = ({data, teams, tokens, duration}) => <AbsoluteFill style={{background: 'rgba(13,27,42,.9)'}}>
-  <Particles teams={teams}/><Motion duration={duration} style={{position: 'absolute', left: 0, top: 100, width: 1920,
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 34}}>
-    <ScoreSlab {...{data, teams, tokens}} h={90} stateWidth={250} label="FINAL"/>
-    <div style={{display: 'flex', gap: 40}}>{['home', 'away'].map(side =>
-      <FinalTable key={side} team={teams[side]} table={data.table[side]} tokens={tokens}/>)}</div>
-  </Motion>
-</AbsoluteFill>;
-
 const Event = ({event, props}) => {
+  const absoluteFrame = event.startFrame + useCurrentFrame();
   const common = {data: event.data, teams: props.teams, tokens: props.tokens, duration: event.durationFrames};
+  if (props.designPreview && event.data.status === 'design_sample') {
+    common.teams = Object.fromEntries(['home', 'away'].map(side => [side, {
+      name: `Sample ${side === 'home' ? 'Home' : 'Away'}`, acronym: side === 'home' ? 'HME' : 'AWY',
+      primary: '#607D91', secondary: '#EEF3F6', line: '#9FB2C1', logo: null,
+    }]));
+  }
   if (event.kind === 'scorebug') {
     const previous = props.events.find(e => e.kind === 'scorebug' &&
-      e.startFrame + e.durationFrames === event.startFrame);
-    return <Bug {...common} changed={previous && previous.data.score.some((s, i) => s !== event.data.score[i])}/>;
+      e.startFrame + e.durationFrames === event.startFrame && e.data.status === event.data.status);
+    const replay = props.events.some(e => e.kind === 'replay' && e.startFrame <= absoluteFrame &&
+      absoluteFrame < e.startFrame + e.durationFrames);
+    return <><Bug {...common} previousScore={previous?.data.score}
+      previousPeriod={previous?.data.period} replay={replay}
+      vertical={props.height > props.width}/>
+      {props.designPreview && event.data.status === 'design_sample' &&
+        <div style={{position: 'absolute', zIndex: 20, left: 96,
+          top: props.height > props.width ? 360 : 180, color: '#9FB2C1', fontSize: 24,
+          fontWeight: 650, letterSpacing: 2}}>PERIOD CHANGE · DESIGN SAMPLE</div>}</>;
   }
-  if (event.kind === 'goal') return <Goal {...common} compact={props.perspective === 'focus' &&
-    props.focusSide !== null && event.data.team !== props.focusSide}/>;
-  if (event.kind === 'penalty') return <Penalty {...common}/>;
-  if (event.kind === 'period') return <><Particles teams={props.teams}/><Period {...common}/></>;
-  if (event.kind === 'final') return <Final {...common}/>;
+  if (['goal', 'penalty', 'call', 'period'].includes(event.kind)) return <>
+    {event.kind === 'period' ? <PeriodRail {...common} vertical={props.height > props.width}/> :
+      <EventRail {...common} kind={event.kind} vertical={props.height > props.width}/>}
+    {event.kind !== 'period' && event.data.status === 'design_sample' && <div style={{position: 'absolute',
+      left: 96, top: props.height > props.width ? 360 : 180, color: '#9FB2C1',
+      fontSize: 24, fontWeight: 650, letterSpacing: 2}}>
+      {event.kind === 'period' ? 'PERIOD CHANGE' : event.kind === 'call' ? 'FICTIONAL CALL' : 'PENALTY'} · DESIGN SAMPLE
+    </div>}
+  </>;
+  if (event.kind === 'replay_pane') return <FrostPane vertical={props.height > props.width} replay
+    team={props.focusSide ? props.teams[props.focusSide] : null}/>;
+  if (event.kind === 'replay') {
+    if (props.events.some(e => e.kind === 'scorebug' && e.startFrame <= absoluteFrame &&
+      absoluteFrame < e.startFrame + e.durationFrames)) return null;
+    if (props.events.some(e => ['goal', 'penalty'].includes(e.kind) &&
+      e.startFrame <= absoluteFrame && absoluteFrame < e.startFrame + e.durationFrames)) return null;
+    const f = absoluteFrame - event.startFrame;
+    return <div style={{position: 'absolute', left: 76, top: 44,
+      opacity: Math.min(1, f / 10, (event.durationFrames - f) / 10)}}>
+    <Slab style={{outline: 'none'}}><div style={{width: 10, height: 48, background: props.tokens.label}}/>
+      <Cell bg={props.tokens.state} w={170} h={48}><b style={{fontSize: 24, letterSpacing: 4}}>REPLAY</b></Cell></Slab>
+  </div>;
+  }
+  if (event.kind === 'final') return <>
+    <FinalCard {...common} vertical={props.height > props.width}/>
+    {props.designPreview && event.data.goalieSample === true && <div style={{position: 'absolute', zIndex: 31,
+      right: 40, top: 24, color: '#9FB2C1', fontSize: 20, fontWeight: 650, letterSpacing: 2}}>
+      GOALIE NUMBERS · DESIGN SAMPLE</div>}
+  </>;
   if (event.kind === 'open_stinger') return <Stinger {...common}/>;
-  if (event.kind === 'period_wipe') return <Stinger {...common} wipe/>;
+  if (event.kind === 'matchup_rail') return <OpeningRail {...common}/>;
+  if (event.kind === 'period_wipe') return <FrostPane vertical={props.height > props.width}
+    team={event.data.status === 'design_sample' ? null :
+      common.teams[event.data.team || props.focusSide]}/>;
   throw new Error(`Unknown graphics event ${event.kind}`);
 };
 
-export const RecapGraphics = props => <AbsoluteFill style={{fontFamily: 'Inter, Arial, sans-serif', color: white}}>
+export const RecapGraphics = props => <AbsoluteFill style={{fontFamily: 'Inter, Arial, sans-serif',
+  fontVariantNumeric: 'tabular-nums', color: white}}>
   <style>{`@font-face {font-family: Inter; src: url('${staticFile('Inter.ttf')}'); font-weight: 100 900;}
     @font-face {font-family: Inter; src: url('${staticFile('Inter-Italic.ttf')}'); font-weight: 100 900; font-style: italic;}`}</style>
-  <div style={{position: 'absolute', width: 1920, height: 1080, transformOrigin: '0 0',
-    transform: `scale(${props.width / 1920}, ${props.height / 1080})`}}>
+  <div style={{position: 'absolute', width: props.height > props.width ? 1080 : 1920,
+     height: props.height > props.width ? 1920 : 1080, transformOrigin: '0 0',
+     transform: props.height > props.width ? `scale(${props.width / 1080}, ${props.height / 1920})` :
+       `scale(${props.width / 1920}, ${props.height / 1080})`}}>
     {props.events.map((event, i) => <Sequence key={i} from={event.startFrame} durationInFrames={event.durationFrames}
       layout="none"><Event event={event} props={props}/></Sequence>)}
   </div>

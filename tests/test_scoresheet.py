@@ -1,5 +1,7 @@
 # tests/test_scoresheet.py
 """Pure checks of scoresheet.py. No model, no OCR: inputs are what the reads return."""
+import json
+
 import scoresheet as ss
 
 
@@ -188,3 +190,136 @@ def test_find_scoresheet_pdfs_skips_old_outputs(tmp_path):
     (tmp_path / "gamesheet.pdf").write_bytes(b"%PDF")
     (tmp_path / "markers.pdf").write_bytes(b"%PDF")
     assert ss.find_scoresheet_pdfs(str(tmp_path)) == [str(tmp_path / "gamesheet.pdf")]
+
+
+def _read_sheet():
+    return {"photo": "IMG_1.jpg", "teams": {"home": "Salty Boys", "away": "Ice Pak"},
+            "rosters": {"home": {"73": ""}, "away": {"47": "Andersen", "00": "Ben Smith BLANKV"}},
+            "goals": {"home": [], "away": [
+                {"per": "1", "time": "9:30", "time_s": 570, "scorer": "47", "assists": [], "type": "ES",
+                 "status": "ok", "reasons": []},
+                {"per": "2", "time": "1:43", "time_s": 103, "scorer": "47", "assists": ["57"], "type": "PP",
+                 "status": "review", "reasons": ["type 'BP' read as PP"]}]},
+            "penalties": {"home": [], "away": []},
+            "score_by_periods": {"home": [], "away": []}, "flags": ["table not found: home_penalties"]}
+
+
+def test_overrides_apply_on_every_run_without_a_second_read(tmp_path, monkeypatch):
+    (tmp_path / "IMG_1.jpg").write_bytes(b"sheet photo")
+    reads = []
+    monkeypatch.setattr(ss, "read_scoresheet", lambda photo, work: reads.append(photo) or _read_sheet())
+    assert ss.main(str(tmp_path)) == 0
+    first = json.loads((tmp_path / "game_sheet.json").read_text())
+    assert first["goals"]["away"][1]["type"] == "PP"
+    assert json.loads((tmp_path / "game_sheet_read.json").read_text())["sheet"]["teams"]["home"] == "Salty Boys"
+
+    (tmp_path / "game_sheet_overrides.json").write_text(json.dumps({
+        "schema_version": 1,
+        "teams": {"home": "The Salty Boys"},
+        "rosters": {"home": {"73": "J. Tripper", "59": "Joe Shiflett"}, "away": {"00": "Ben Smith"}},
+        "goals": {"away": {"2": {"was": {"type": "PP"}, "type": "SH", "time": "1:10"},
+                           "3": {"per": "3", "time": "4:00", "scorer": "00", "assists": ["47"], "type": "ES"}}},
+        "penalties": {"home": {"1": {"per": "2", "player": "73", "infraction": "trip", "minutes": "2",
+                                     "off": "1:52"}}},
+        "shots_on_goal": {"home": [10, 4, 6], "away": [10, 13, 9]},
+        "goalkeeping": {"home": [{"player": "59", "name": "Joe Shiflett"}]},
+    }))
+    assert ss.main(str(tmp_path)) == 0
+    assert len(reads) == 1
+    sheet = json.loads((tmp_path / "game_sheet.json").read_text())
+    assert sheet["teams"] == {"home": "The Salty Boys", "away": "Ice Pak"}
+    assert sheet["rosters"]["home"] == {"73": "J. Tripper", "59": "Joe Shiflett"}
+    assert sheet["rosters"]["away"]["00"] == "Ben Smith"
+    fixed, added = sheet["goals"]["away"][1], sheet["goals"]["away"][2]
+    assert (fixed["type"], fixed["time"], fixed["time_s"], fixed["status"], fixed["reasons"]) == \
+        ("SH", "1:10", 70, "ok", [])
+    assert fixed["source"] == "override" and fixed["scorer"] == "47"
+    assert (added["scorer"], added["assists"], added["time_s"], added["status"]) == ("00", ["47"], 240, "ok")
+    pen = sheet["penalties"]["home"][0]
+    assert (pen["player"], pen["infraction"], pen["minutes"], pen["status"]) == ("73", "TRIP", "2", "ok")
+    assert sheet["shots_on_goal"] == {"home": [10, 4, 6], "away": [10, 13, 9]}
+    assert sheet["goalkeeping"]["home"] == [{"player": "59", "name": "Joe Shiflett"}]
+    assert json.loads((tmp_path / "game_sheet_read.json").read_text())["sheet"]["goals"]["away"][1]["type"] == "PP"
+
+
+def test_stale_and_removing_overrides(tmp_path, monkeypatch):
+    (tmp_path / "IMG_1.jpg").write_bytes(b"sheet photo")
+    monkeypatch.setattr(ss, "read_scoresheet", lambda photo, work: _read_sheet())
+    (tmp_path / "game_sheet_overrides.json").write_text(json.dumps({
+        "schema_version": 1,
+        "goals": {"away": {"1": None, "2": {"was": {"type": "ES"}, "type": "SH"}}},
+        "rosters": {"home": {"73": None}},
+    }))
+    assert ss.main(str(tmp_path)) == 0
+    sheet = json.loads((tmp_path / "game_sheet.json").read_text())
+    assert [g["time"] for g in sheet["goals"]["away"]] == ["1:43"]
+    assert sheet["goals"]["away"][0]["type"] == "PP" and sheet["goals"]["away"][0]["status"] == "review"
+    assert any("away goal 2" in f and "not applied" in f for f in sheet["flags"])
+    assert sheet["rosters"]["home"] == {}
+
+
+def test_invalid_overrides_stop_instead_of_being_ignored(tmp_path, monkeypatch):
+    (tmp_path / "IMG_1.jpg").write_bytes(b"sheet photo")
+    monkeypatch.setattr(ss, "read_scoresheet", lambda photo, work: _read_sheet())
+    (tmp_path / "game_sheet_overrides.json").write_text(json.dumps({"schema_version": 1, "goal": {}}))
+    assert ss.main(str(tmp_path)) == 1
+    assert not (tmp_path / "game_sheet.json").exists()
+
+
+def test_a_changed_sheet_photo_is_read_again(tmp_path, monkeypatch):
+    photo = tmp_path / "IMG_1.jpg"
+    photo.write_bytes(b"sheet photo")
+    reads = []
+    monkeypatch.setattr(ss, "read_scoresheet", lambda p, work: reads.append(p) or _read_sheet())
+    ss.main(str(tmp_path))
+    photo.write_bytes(b"a retaken, larger sheet photo")
+    ss.main(str(tmp_path))
+    assert len(reads) == 2
+
+
+def test_added_rows_need_their_required_fields(tmp_path, monkeypatch):
+    (tmp_path / "IMG_1.jpg").write_bytes(b"sheet photo")
+    monkeypatch.setattr(ss, "read_scoresheet", lambda photo, work: _read_sheet())
+    (tmp_path / "game_sheet_overrides.json").write_text(json.dumps({
+        "schema_version": 1, "goals": {"away": {"3": {"time": "4:00", "scorer": "00"}}}}))
+    assert ss.main(str(tmp_path)) == 1
+    assert not (tmp_path / "game_sheet.json").exists()
+
+
+def test_edits_keep_unknown_type_and_cover_pdf_fields_and_checked_flags(tmp_path, monkeypatch):
+    (tmp_path / "IMG_1.jpg").write_bytes(b"sheet photo")
+    read = _read_sheet()
+    read["goals"]["away"][0]["type"] = ""
+    monkeypatch.setattr(ss, "read_scoresheet", lambda photo, work: read)
+    (tmp_path / "game_sheet_overrides.json").write_text(json.dumps({
+        "schema_version": 1,
+        "goals": {"away": {"1": {"scorer": "00"}}},
+        "date": "2026-02-01",
+        "final_score": {"home": 0, "away": 7},
+        "dismiss_flags": ["table not found: home_penalties", "a flag the reader never wrote"],
+    }))
+    assert ss.main(str(tmp_path)) == 0
+    sheet = json.loads((tmp_path / "game_sheet.json").read_text())
+    assert sheet["goals"]["away"][0]["type"] == ""
+    assert sheet["date"] == "2026-02-01" and sheet["final_score"] == {"home": 0, "away": 7}
+    assert "table not found: home_penalties" not in sheet["flags"]
+    assert any("a flag the reader never wrote" in f and "not dismissed" in f for f in sheet["flags"])
+
+
+def test_a_new_reader_version_reads_the_sheet_again(tmp_path, monkeypatch):
+    (tmp_path / "IMG_1.jpg").write_bytes(b"sheet photo")
+    reads = []
+    monkeypatch.setattr(ss, "read_scoresheet", lambda p, work: reads.append(p) or _read_sheet())
+    ss.main(str(tmp_path))
+    monkeypatch.setattr(ss, "READER_VERSION", ss.READER_VERSION + 1)
+    ss.main(str(tmp_path))
+    assert len(reads) == 2
+
+
+def test_final_score_override_fills_an_unreadable_pdf_final_score():
+    # gamesheet_pdf writes "final_score": null when it cannot read the total.
+    sheet = {"goals": {"home": [], "away": []}, "penalties": {"home": [], "away": []},
+             "flags": [], "final_score": None}
+    out = ss.apply_overrides(sheet, {"schema_version": 1, "final_score": {"home": 2, "away": 1}},
+                             check_rows=False)
+    assert out["final_score"] == {"home": 2, "away": 1}

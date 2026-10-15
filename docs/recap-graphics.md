@@ -31,6 +31,12 @@ For a direct run, pass effective options as JSON. The pipeline supplies these op
 ```
 
 Add `--props-only` to write props and check the mixed video's dimensions, frame rate, and frame count.
+The graphics stage uses a local workspace under the system temporary directory, keyed by the Game Folder path.
+Add `--workspace LOCAL_DIRECTORY` to select a persistent local directory.
+Props, copied logos, alpha clips, the concat manifest, and the temporary video stay in that workspace.
+The stage validates the local video before copying final artifacts to the Game Folder.
+It copies all artifacts before replacing existing outputs. A failed copy preserves the existing video and reports.
+Do not select a network share as the workspace.
 For a manual preview, render an inclusive frame range:
 
 ```sh
@@ -51,7 +57,7 @@ The stage writes:
 - `recap_graphics_props.json`: the Python-to-Remotion interface.
 - `recap_graphics.json`: the output name, source video, duration, and flags.
 - `<assembly output stem>_graphics.mp4`: the Recap with graphics and mixed audio.
-- `.recap_cache/graphics/`: copied logos, alpha clips, and `clips.ffconcat`.
+- Local workspace: copied logos, alpha clips, diagnostic props, and `clips.ffconcat`.
 
 The runner fingerprints the input JSON, mixed video identity, Team Config, logos, and renderer sources.
 It reruns graphics when these inputs change.
@@ -62,7 +68,7 @@ Failed renders preserve the previous published props and report. The cache retai
 ## Theme
 
 The stage matches each Game Sheet team name to `Team Config.name`, without case differences.
-The effective options supply `teams`, `focus_team`, `perspective`, and `_layers.config_dir`.
+The effective options supply `teams`, `focus_team`, `perspective`, `kit`, and `_layers.config_dir`.
 Team Config supports:
 
 ```json
@@ -81,7 +87,36 @@ The stage uses an acronym when no logo exists. It flags a configured logo that i
 Invalid colors use defaults and produce flags.
 An unmatched Focus Team produces a flag and uses neutral cards.
 
-The home and away tiles use their primary colors. Their edge stripes use their secondary colors.
+### Kits
+
+A Team Config can list the team's kits (jerseys). The `kit` option selects one for the Focus Team only:
+
+```json
+{
+  "default_kit": "red",
+  "kits": {
+    "red": {"fill": "#A60735", "line": "#E8354F", "opening": "assets/black_ice_opening_red.mp4"},
+    "navy": {"fill": "#102E52", "line": "#5AA4D0"},
+    "white": {"fill": "#FFFFFF", "line": "#EEF3F6", "text": "#1E3160", "crest": "assets/icepak.png"}
+  }
+}
+```
+
+- `fill` replaces `primary` for large areas. `line` is for thin lines and light. `text` is the type colour on the fill.
+- Without `text`, the stage uses white when white has 4.5:1 contrast on the fill, and graphite otherwise.
+- `crest` is optional and replaces the Team Config crest for that kit.
+- `opening` is optional: a pre-rendered opening video for that kit (see "Pre-rendered opening"). A team-level `opening` applies to every kit without one.
+- `default_kit` becomes the inferred `kit` in `recap_options.json`. Use `--kit navy` or set `"inferred": false` to change it.
+- `fill` and `line` are required. An unknown kit, a missing `fill` or `line`, or an invalid colour produces a flag and keeps the team colours.
+- The kit follows the selected Focus Team: a pinned `focus_team` in `recap_options.json`, or `--focus-team` for one run.
+
+Every team gets a `line` colour. It must have 3:1 contrast on the graphite plate `#0E1319`.
+A line that fails uses frost grey `#9FB2C1`. A failing kit line also produces a flag.
+When the opponent's line is too similar to the Focus Team line (RGB distance under 120), the opponent uses its secondary colour, or frost grey when that also fails.
+The accent token is the Focus Team line. Without a Focus Team it stays ice cyan `#7FD3F0`.
+
+The home and away tiles use their primary colors. Thin team lines (scorebug, rails, FINAL, matchup rail) and the frost-pane glow use the `line` colour.
+Only the period-plate score slab keeps a secondary-colour edge stripe.
 Semantic tokens stay consistent: white score and GOAL panels, navy state panels, black details, and blue labels.
 In focus perspective, an opponent GOAL uses a compact card. Neutral perspective uses equal cards.
 
@@ -99,8 +134,10 @@ The renderer must not infer scores, players, periods, or timing.
   "height": 1080,
   "durationFrames": 1200,
   "teams": {
-    "home": {"name": "Ice Pak", "acronym": "IPK", "primary": "#1E3160", "secondary": "#5AA4D0", "logo": "home.png"},
-    "away": {"name": "Visitors", "acronym": "VSR", "primary": "#7B2D36", "secondary": "#FFFFFF", "logo": null}
+    "home": {"name": "Ice Pak", "acronym": "IPK", "primary": "#A60735", "secondary": "#000000",
+             "line": "#E8354F", "kit": "red", "text": "#FFFFFF", "logo": "home.png"},
+    "away": {"name": "Visitors", "acronym": "VSR", "primary": "#7B2D36", "secondary": "#FFFFFF",
+             "line": "#9FB2C1", "logo": null}
   },
   "focusSide": "home",
   "perspective": "focus",
@@ -122,6 +159,7 @@ Events appear in layer order: scorebug first, event cards next, FINAL last.
 | `period` | `score`, `period` |
 | `final` | `score`, `table.home`, `table.away` |
 | `open_stinger` | `team` (`home`, `away`, or `null`) |
+| `matchup_rail` | `team` (`home`, `away`, or `null`), `date` |
 | `period_wipe` | `team`, `score`, `period` |
 
 Each FINAL table contains `skaters` and `goalies` arrays.
@@ -134,10 +172,11 @@ FINAL includes both teams and every eligible row.
 
 ## 3D stingers
 
-The default `--start stinger` reserves 75 frames before chronological play.
+The default `--start stinger` reserves 135 frames before chronological play.
+The full matchup holds for about 1.6 seconds before the exit starts.
 The slab slides onto a 200-by-85-foot rink, turns through a hockey stop, and releases soft snow.
-The face uses the Focus Team's name, colors, and configured logo. Ice Pak displays the `ICEPAK / HOCKEY` lockup.
-A missing logo uses the wordmark. An unmatched Focus Team uses a neutral hockey face.
+The face uses the Focus Team's colors and configured `lockup`. Ice Pak displays the `ICEPAK / HOCKEY` lockup.
+A missing lockup uses the wordmark, then the logo, then the team name. An unmatched Focus Team uses a neutral hockey face.
 The face, stripes, and frost share the slab outline and parent transform.
 Screen-space snow and mist cannot intersect the rink or slab geometry.
 
@@ -151,11 +190,31 @@ Assembly schema 3 adds `start` and `opening`.
 `opening` contains ordered `cold_open` and `stinger` entries with the same frame and source fields as clips.
 A stinger has no source parts. The assembly renders black frames; graphics replaces them with the 3D scene.
 The mix places `game_start` and its neutral sting at the stinger's output start.
+In placeholder mode, `game_start` follows the reserved opening duration.
+Its original sound sketch has a blade scrape, impact, shimmer, and exit scrape.
+The impact occurs at frame 26 of the 135-frame choreography.
+The exit scrape occurs at frames 108–134. The sound stays quiet during the matchup hold.
+An approved `game_start` file keeps its declared duration. A play start keeps the legacy sound.
+The generated sketch remains placeholder audio until the user approves a Cue Library asset.
 Graphics rejects a reserved opening that does not match the audio cue.
-For an older assembly, explicit `start: stinger` overlays its first 75 frames without changing audio or duration.
+### Pre-rendered opening
+
+When the Focus Team kit (or Team Config) has an `opening` video, the assembly uses it in place of the black frames.
+The video must be 1920×1080 at 30 fps. The Black Ice opening is 148 frames, rendered by `v3/blender/black_ice_macro.py`.
+A relative path is relative to the config folder. An unreadable video produces a flag and uses the 3D stinger.
+The stinger entry takes the video length less 9 frames and stores the video in `opening_video`.
+The last 9 frames dissolve over the first 9 frames of the next piece. There is no white flash.
+Graphics then draws only a `matchup_rail` event, not the 3D stinger.
+The rail rises from frame 95 of the opening, holds for 75 frames after the dissolve, and exits in 10 frames.
+The rail ends at least 4 frames before the first information rail. A shortened rail produces a flag.
+The runner fingerprints the video, so a new render of it reruns the assembly.
+
+For an older assembly, explicit `start: stinger` compresses the opening motion into its first 75 frames.
+This fallback does not change audio or duration.
 An older assembly needs `rerun --from assembly` for a cold open or a reserved opening.
 
-Each `sfx_period_wipe` cue starts a 30-frame lens-snow wipe with the Focus Team crest or wordmark.
+By default a period change is a plain cut. The scorebug period cell rolls to the new period and flashes cyan for 30 frames, like a score change. The mix writes `sfx_period_wipe` cues only when the option `period_transitions` is `true` (intended for full-game coverage).
+Each `sfx_period_wipe` cue starts a 30-frame frost-pane wipe. The pane uses a WebGL frost shader and shows the Focus Team `crest` at about 60% of the screen height. A missing `crest` uses the `logo`. Use a crest with a transparent background.
 The two-second period card follows the wipe. Both events use the upcoming period's score.
 Short end-of-video events stop at the last frame.
 Layer order is scorebug, cards, stingers, then FINAL.
@@ -170,7 +229,7 @@ node v3/graphics/render.mjs recap-props.json OUTPUT_DIRECTORY --validate
 ```
 
 Standalone props use the same schema, teams, tokens, and `focusSide`, with an empty `events` array.
-Set `durationFrames` to 75 for an opening or 30 for a wipe.
+Set `durationFrames` to 135 for an opening or 30 for a wipe.
 `--validate` checks frame bounds without creating output files or launching Chromium.
 
 ## Data and timing rules
