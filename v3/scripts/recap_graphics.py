@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -27,12 +28,16 @@ def player_name(sheet: dict, side: str, num) -> str:
     return (value.get("name") if isinstance(value, dict) else value) or f"#{num}"
 
 
+def player_number(sheet: dict, side: str, key) -> str:
+    return (sheet.get("_numbers") or {}).get(side, {}).get(str(key), str(key))
+
+
 def goal_data(sheet: dict, gid: str) -> dict:
     side, index = gid.split(":")
     row = sheet["goals"][side][int(index) - 1]
     num = str(row.get("scorer") or "?")
-    return {"id": gid, "team": side, "num": num, "scorer": player_name(sheet, side, num),
-            "assists": [f"{n} {player_name(sheet, side, n)}" if not player_name(sheet, side, n).startswith("#")
+    return {"id": gid, "team": side, "num": player_number(sheet, side, num), "scorer": player_name(sheet, side, num),
+            "assists": [f"{player_number(sheet, side, n)} {player_name(sheet, side, n)}" if not player_name(sheet, side, n).startswith("#")
                         else player_name(sheet, side, n) for n in row.get("assists") or []],
             "type": row.get("type") or "", "period": int(row["per"]) if str(row["per"]).isdigit() else 4}
 
@@ -60,6 +65,11 @@ MAX_FINAL_SKATERS = 10  # FINAL lists the top skaters per team, not the full ros
 
 
 def final_data(sheet: dict, flags: list) -> dict:
+    if "_final" in sheet:
+        data = copy.deepcopy(sheet["_final"])
+        for table in data["table"].values():
+            table["skaters"] = table["skaters"][:MAX_FINAL_SKATERS]
+        return data
     tables = {}
     for side in ("home", "away"):
         rows = {}
@@ -255,7 +265,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         raise ValueError("audio duration does not match the assembly plan")
     if audio["video"] != plan["output"]:
         raise ValueError("audio source does not match the assembly plan")
-    events, flags = [], []
+    events, flags = [], list(sheet.get("flags") or [])
     timeline = build_timeline(plan)
     frame_cursor = 0
     for entry in timeline:
@@ -339,7 +349,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
             num = str(row.get("player") or "?")
             events.append({"kind": "penalty", "startFrame": start,
                            "durationFrames": min(4 * fps, frames - start),
-                           "data": {"id": gid, "team": side, "num": num,
+                            "data": {"id": gid, "team": side, "num": player_number(sheet, side, num),
                                     "name": player_name(sheet, side, num),
                                      "minutes": row.get("minutes") if row.get("minutes") is not None else "?",
                                      "infraction": row.get("infraction") or "PENALTY"}})
@@ -506,11 +516,13 @@ def main(argv=None) -> int:
     video_published = False
     publication_files = []
     try:
-        sheet, selection, plan, audio = [json.loads((root / n).read_text()) for n in
-                                       ("game_sheet.json", "selection.json", "recap_assembly.json", "recap_audio.json")]
+        selection, plan, audio = [json.loads((root / n).read_text()) for n in
+                                 ("selection.json", "recap_assembly.json", "recap_audio.json")]
         from recap_assembly import load_play_reviews
         selection = load_play_reviews(root, selection)
         options = json.loads(args.options)
+        from game_data import load_graphics_inputs
+        sheet, options = load_graphics_inputs(root, options)
         if not plan.get("clips"):
             raise ValueError("recap_assembly.json has no clips")
         key = hashlib.sha256(str(root).encode()).hexdigest()[:20]

@@ -604,6 +604,7 @@ def apply_overrides(sheet: dict, overrides: dict, *, check_rows: bool = True) ->
                 roster.pop(str(num), None)
             elif isinstance(name, str):
                 roster[str(num)] = name
+                out.setdefault("roster_sources", {}).setdefault(side, {})[str(num)] = "override game_sheet_overrides.json"
             else:
                 raise ValueError(f"rosters.{side}.{num}: expected a name or null")
     for key, label in (("goals", "goal"), ("penalties", "penalty")):
@@ -643,7 +644,7 @@ def apply_overrides(sheet: dict, overrides: dict, *, check_rows: bool = True) ->
     for side, rows in _side_map(overrides, "goalkeeping").items():
         if not isinstance(rows, list) or not all(isinstance(r, dict) and "player" in r for r in rows):
             raise ValueError(f"goalkeeping.{side}: expected a list of rows with 'player'")
-        out.setdefault("goalkeeping", {})[side] = rows
+        out.setdefault("goalkeeping", {})[side] = [dict(r, source="override game_sheet_overrides.json") for r in rows]
     if "date" in overrides:
         if not isinstance(overrides["date"], str) or not overrides["date"].strip():
             raise ValueError("date: expected text such as 2026-02-01")

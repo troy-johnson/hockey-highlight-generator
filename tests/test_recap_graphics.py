@@ -312,13 +312,14 @@ def test_short_rails_are_omitted_instead_of_flashing_over_other_plays(tmp_path):
     assert sum("insufficient readable time" in f for f in props["flags"]) == 2
 
 
-def test_cli_runs_alpha_renderer_then_overlay_with_audio_copy(tmp_path, monkeypatch):
+def test_cli_runs_alpha_renderer_then_overlay_with_audio_copy(tmp_path, monkeypatch, freeze_sheet):
     import recap_graphics as rg
     sheet, selection, plan, audio = game()
     for name, data in [("game_sheet.json", sheet), ("selection.json", selection),
                        ("recap_assembly.json", plan), ("recap_audio.json", audio)]:
         (tmp_path / name).write_text(json.dumps(data))
     calls, published = [], []
+    freeze_sheet(sheet)
     workspace = tmp_path.parent / (tmp_path.name + "-local-workspace")
     def run(argv, **kwargs):
         calls.append(argv)
@@ -358,7 +359,7 @@ def test_cli_runs_alpha_renderer_then_overlay_with_audio_copy(tmp_path, monkeypa
     assert report["output"] == "A_Recap_graphics.mp4" and report["duration_s"] == 40
 
 
-def test_cli_render_failure_does_not_publish_success(tmp_path, monkeypatch):
+def test_cli_render_failure_does_not_publish_success(tmp_path, monkeypatch, freeze_sheet):
     import recap_graphics as rg
     system_temp = tmp_path.parent / (tmp_path.name + "-system-temp")
     monkeypatch.setattr(rg.tempfile, "gettempdir", lambda: str(system_temp))
@@ -367,6 +368,7 @@ def test_cli_render_failure_does_not_publish_success(tmp_path, monkeypatch):
                        ("recap_assembly.json", plan), ("recap_audio.json", audio)]:
         (tmp_path / name).write_text(json.dumps(data))
     (tmp_path / rg.PROPS_FILE).write_text('{"previous": true}\n')
+    freeze_sheet(sheet)
     def run(argv, **kwargs):
         if argv[0] == "ffprobe":
             return SimpleNamespace(returncode=0, stdout=json.dumps({"streams": [
@@ -380,7 +382,7 @@ def test_cli_render_failure_does_not_publish_success(tmp_path, monkeypatch):
     assert list((system_temp / "hockeyrecap-graphics").glob("*/recap_graphics_props.json"))
 
 
-def test_cli_failed_share_copy_preserves_previous_video_and_reports(tmp_path, monkeypatch):
+def test_cli_failed_share_copy_preserves_previous_video_and_reports(tmp_path, monkeypatch, freeze_sheet):
     import recap_graphics as rg
     sheet, selection, plan, audio = game()
     for name, data in [("game_sheet.json", sheet), ("selection.json", selection),
@@ -394,6 +396,7 @@ def test_cli_failed_share_copy_preserves_previous_video_and_reports(tmp_path, mo
     logo = tmp_path / "logo.png"
     logo.write_bytes(b"synthetic logo")
     options = {"teams": {"ice": {"name": "Ice Pak", "logo": str(logo)}}}
+    freeze_sheet(sheet, options)
     def run(argv, **kwargs):
         if argv[0] == "ffprobe":
             return SimpleNamespace(returncode=0, stdout=json.dumps({"streams": [
@@ -419,7 +422,7 @@ def test_cli_failed_share_copy_preserves_previous_video_and_reports(tmp_path, mo
     assert not list(tmp_path.glob(".*.tmp"))
 
 
-def test_cli_rejects_truncated_overlay_before_publication(tmp_path, monkeypatch):
+def test_cli_rejects_truncated_overlay_before_publication(tmp_path, monkeypatch, freeze_sheet):
     import recap_graphics as rg
     monkeypatch.setattr(rg.tempfile, "gettempdir", lambda: str(tmp_path.parent / (tmp_path.name + "-temp")))
     sheet, selection, plan, audio = game()
@@ -427,6 +430,7 @@ def test_cli_rejects_truncated_overlay_before_publication(tmp_path, monkeypatch)
                        ("recap_assembly.json", plan), ("recap_audio.json", audio)]:
         (tmp_path / name).write_text(json.dumps(data))
     published = []
+    freeze_sheet(sheet)
     def run(argv, **kwargs):
         frames = "1199" if argv[-1].endswith(".tmp.mp4") else "1200"
         return SimpleNamespace(returncode=0, stdout=json.dumps({"streams": [
@@ -447,7 +451,7 @@ def test_graphics_stage_tracks_theme_and_mixed_video(tmp_path, monkeypatch):
     assert stage.outputs(ctx) == ["recap_graphics_props.json", "recap_graphics.json", "A_Recap_graphics.mp4"]
     before = stage.fingerprint(ctx)
     ctx.options["teams"]["ice"]["colors"] = ["#FF0000", "#FFFFFF"]
-    assert before != stage.fingerprint(ctx)
+    assert before == stage.fingerprint(ctx)  # Only the snapshot supplies team data.
     changed = stage.fingerprint(ctx)
     ctx.options["kit"] = "navy"
     assert changed != stage.fingerprint(ctx)

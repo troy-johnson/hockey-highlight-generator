@@ -4,7 +4,7 @@ Options for one hockeyrecap run, in four layers (spec 002 §4). Each layer
 overrides the one before it:
 
   1. League        <config>/leagues/<id>.json   rules; optional "options" block
-  2. Team Config   <config>/teams/<id>.json     name, colors, Roster, own_team;
+  2. Team Config   <config>/hockey.db          name, colors, Roster, own_team;
                                                 optional "options" block
   3. Per-game file <Game Folder>/recap_options.json, written on the first run.
                    Each entry is {"value", "inferred", "source"}. An inferred
@@ -21,7 +21,10 @@ import copy
 import json
 import os
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(__file__))
 
 OPTIONS_FILE = "recap_options.json"
 
@@ -74,9 +77,21 @@ def _load_dir(folder: Path) -> dict[str, dict]:
     return items
 
 
-def load_config(cfg: Path) -> tuple[dict[str, dict], dict[str, dict]]:
-    """(leagues, teams) from the config folder, keyed by file name without .json."""
-    return _load_dir(cfg / "leagues"), _load_dir(cfg / "teams")
+def load_config(cfg: Path, season: str | None = None) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Read database Team Configs first; use JSON only for teams absent from the database."""
+    from team_db import read_connection, team_configs
+    teams = {}
+    if (cfg / "hockey.db").exists():
+        conn = read_connection(cfg / "hockey.db")
+        try:
+            teams = team_configs(conn, season)
+        finally:
+            conn.close()
+    for path in sorted((cfg / "teams").glob("*.json")):
+        if path.stem not in teams:
+            teams[path.stem] = json.loads(path.read_text())
+            teams[path.stem]["_source"] = "json fallback"
+    return _load_dir(cfg / "leagues"), teams
 
 
 def parse_folder_name(name: str) -> tuple[str | None, str | None]:
@@ -210,6 +225,22 @@ def resolve_options(game_folder: str, cli: dict | None = None, cfg_override: str
     opts["teams"] = deep_merge(teams, opts.get("teams", {}))
     opts = deep_merge(opts, game_values)
     opts = deep_merge(opts, cli)
+    from team_db import season_for, validate_season, RULEBOOKS
+    rules = opts["league_rules"]
+    season = rules.get("season")
+    if season is None and opts.get("date"):
+        season = season_for(opts["date"], rules.get("season_start_month", 8))
+    if season is not None:
+        validate_season(season)
+        _, seasonal_teams = load_config(cfg, season)
+        # The database owns identity and Roster data, including an empty Roster.
+        for tid, team in seasonal_teams.items():
+            if team.get("_source") == "database":
+                opts["teams"][tid] = deep_merge(opts["teams"].get(tid, {}), team)
+    opts["season"] = season
+    opts["rulebook"] = rules.get("rulebook", "usah")
+    if opts["rulebook"] not in RULEBOOKS:
+        raise ValueError(f"unknown League rulebook {opts['rulebook']!r}; use usah or nhl")
     # A CLI Focus Team changes its default kit for this run only (never written).
     kit_entry = game.get("kit")
     if "focus_team" in cli and "kit" not in cli and (
@@ -218,12 +249,18 @@ def resolve_options(game_folder: str, cli: dict | None = None, cfg_override: str
     opts["_layers"] = {
         "config_dir": str(cfg),
         "league": f"leagues/{league_id}.json" if league else None,
-        "team": f"teams/{focus_id}.json" if focus else None,
+        "team": ("hockey.db" if focus.get("_source") == "database" else f"teams/{focus_id}.json") if focus else None,
         "game": str(Path(game_folder) / OPTIONS_FILE),
         "cli": sorted(cli),
     }
     opts["_created"] = created
     flags = []
+    for tid, team in opts["teams"].items():
+        if team.get("_source") == "json fallback":
+            flags.append(f"{tid}: no database team record; using JSON fallback {cfg / 'teams' / (tid + '.json')}")
+        elif team.get("_source") == "database" and season and team.get("_roster_season") != season:
+            used = team.get("_roster_season")
+            flags.append(f"{tid}: no {season} Roster; " + (f"using {used}" if used else "no earlier Roster"))
     if league_id and not league:
         flags.append(f"League '{league_id}' has no config in {cfg / 'leagues'}")
     if focus_id and not focus:

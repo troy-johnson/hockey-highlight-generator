@@ -41,6 +41,7 @@ import re
 import sqlite3
 import sys
 import unicodedata
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -150,6 +151,17 @@ MIGRATIONS = [
     ALTER TABLE games ADD COLUMN rulebook TEXT NOT NULL DEFAULT 'usah';
     ALTER TABLE events ADD COLUMN minutes_rule TEXT;
     """,
+    """
+    CREATE TABLE people_dismissals (
+        person_a INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        person_b INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        CHECK (person_a < person_b),
+        PRIMARY KEY (person_a, person_b)
+    );
+    ALTER TABLE games ADD COLUMN sheet_data TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE events ADD COLUMN goal_type TEXT;
+    """,
 ]
 
 # Penalty classes and the minutes each puts in the records (not the time served on the clock).
@@ -213,13 +225,85 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 
 # --- value rules ------------------------------------------------------------------------
 
-def season_for(date: str) -> str:
-    """Adult league seasons start in August: 2026-10-11 belongs to 2026-2027."""
+def season_for(date: str, start_month: int = 8) -> str:
+    """Use the League's Season start month, or August by default."""
     if not isinstance(date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         raise ValueError(f"date must be YYYY-MM-DD, not {date!r}")
     d = dt.date.fromisoformat(date)
-    start = d.year if d.month >= 8 else d.year - 1
+    if type(start_month) is not int or not 1 <= start_month <= 12:
+        raise ValueError("season_start_month must be an integer from 1 to 12")
+    start = d.year if d.month >= start_month else d.year - 1
     return f"{start}-{start + 1}"
+
+
+def validate_season(season: str) -> str:
+    if not isinstance(season, str) or not re.fullmatch(r"\d{4}-\d{4}", season):
+        raise ValueError(f"season must look like 2026-2027, not {season!r}")
+    first, last = map(int, season.split("-"))
+    if last != first + 1:
+        raise ValueError("season years must be consecutive")
+    return season
+
+
+@contextmanager
+def transaction(conn):
+    """Keep nested imports and edits in the caller's transaction."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN")
+        try:
+            yield
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return
+    conn.execute("SAVEPOINT team_db_edit")
+    try:
+        yield
+        conn.execute("RELEASE team_db_edit")
+    except Exception:
+        conn.execute("ROLLBACK TO team_db_edit")
+        conn.execute("RELEASE team_db_edit")
+        raise
+
+
+def read_connection(path: str | Path):
+    """Read without creating, migrating, or changing a database."""
+    conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version > len(MIGRATIONS) or version < 3:
+        conn.close()
+        raise RuntimeError(f"{path} has schema version {version}; run team_db.py init with compatible code")
+    return conn
+
+
+def team_configs(conn, season: str | None = None) -> dict:
+    """Read Team Configs without reducing shared numbers to one player."""
+    teams = {}
+    for t in conn.execute("SELECT * FROM teams ORDER BY id"):
+        cfg = json.loads(t["extra"])
+        cfg.update({"name": t["name"], "short_name": t["short_name"], "own_team": bool(t["own_team"]),
+                    "colors": json.loads(t["colors"]), "kits": json.loads(t["kits"])})
+        for key, value in json.loads(t["assets"]).items():
+            cfg[key] = value["path"]
+        cfg.pop("roster", None)
+        cfg.pop("listed_roster", None)
+        cfg["_source"] = "database"
+        if season is not None:
+            used = _roster_season(conn, t["id"], season)
+            rows = conn.execute("SELECT p.*, r.jersey, r.jersey_label, r.position, r.role, r.source jersey_source "
+                                "FROM roster_entries r JOIN people p ON p.id = r.person_id "
+                                "WHERE r.team_id = ? AND r.season = ? ORDER BY r.id", (t["id"], used)).fetchall()
+            cfg["listed_roster"] = [{**dict(r), "name": r["display_name"] or f"{r['first_name']} {r['last_name']}"}
+                                    for r in rows]
+            # The legacy map includes only numbers that identify one person.
+            numbers = [r["jersey"] for r in rows]
+            cfg["roster"] = {r["jersey_label"] or str(r["jersey"]): r["display_name"] or f"{r['first_name']} {r['last_name']}"
+                             for r in rows if r["jersey"] is not None and numbers.count(r["jersey"]) == 1}
+            cfg["_roster_season"] = used
+        teams[t["id"]] = cfg
+    return teams
 
 
 def source_of(value: str | None, default: str = "user") -> str:
@@ -387,10 +471,13 @@ def import_team(conn, path: str | Path, season: str, source: str | None = None) 
     """Import one Team Config JSON file and its listed Roster for one Season. All or nothing."""
     path = Path(path)
     cfg = json.loads(path.read_text())
-    team_id = path.stem
-    source = source_of(source or f"import {path.name}")
-    if not re.fullmatch(r"\d{4}-\d{4}", season):
-        raise ValueError(f"season must look like 2026-2027, not {season!r}")
+    return store_team(conn, path.stem, cfg, season, source or f"import {path.name}")
+
+
+def store_team(conn, team_id: str, cfg: dict, season: str, source: str) -> str:
+    """Store a Team Config and Roster from the JSON fallback or an explicit import."""
+    source = source_of(source)
+    validate_season(season)
     known = {"name", "short_name", "own_team", "colors", "kits", "logo", "lockup", "crest",
              "roster", "listed_roster", "family_links"}
     assets = {k: {"path": cfg[k], "source": source_of(cfg.get(f"{k}_source") or source)}
@@ -399,7 +486,7 @@ def import_team(conn, path: str | Path, season: str, source: str | None = None) 
     rows = cfg.get("listed_roster")
     if rows is None:  # older files have only the number -> name map
         rows = [{"jersey": num, "name": name} for num, name in (cfg.get("roster") or {}).items()]
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO teams (id, name, short_name, own_team, colors, kits, assets, extra, source) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, "
@@ -415,7 +502,7 @@ def import_team(conn, path: str | Path, season: str, source: str | None = None) 
             elif row.get("name"):
                 first, last = split_name(row["name"])
             else:
-                raise ValueError(f"{path.name}: roster row {i} has no name")
+                raise ValueError(f"{team_id}: roster row {i} has no name")
             parsed.append((row, first, last, *parse_jersey(row.get("jersey"))))
         # Rows whose name and number both match a known person claim that person first,
         # so row order cannot give an old player's record to a new namesake.
@@ -509,7 +596,7 @@ def merge_people(conn, keep: int, drop: int) -> None:
     if conn.execute("SELECT 1 FROM family_links WHERE (parent_id = ? AND child_id = ?) OR (parent_id = ? AND child_id = ?)",
                     (keep, drop, drop, keep)).fetchone():
         raise ValueError(f"people {keep} and {drop} are linked as family; not one person")
-    with conn:
+    with transaction(conn):
         for table, keys in (("roster_entries", "team_id, season"), ("game_players", "game_id")):
             clash = conn.execute(f"SELECT COUNT(*) FROM {table} a JOIN {table} b USING ({keys}) "
                                  "WHERE a.person_id = ? AND b.person_id = ?", (keep, drop)).fetchone()[0]
@@ -520,6 +607,12 @@ def merge_people(conn, keep: int, drop: int) -> None:
                            ("family_links", "child_id")):
             conn.execute(f"UPDATE OR IGNORE {table} SET {col} = ? WHERE {col} = ?", (keep, drop))
         conn.execute("DELETE FROM family_links WHERE parent_id = ? OR child_id = ?", (drop, drop))
+        for row in conn.execute("SELECT * FROM people_dismissals WHERE person_a = ? OR person_b = ?",
+                                (drop, drop)).fetchall():
+            pair = sorted(keep if p == drop else p for p in (row["person_a"], row["person_b"]))
+            if pair[0] != pair[1]:
+                conn.execute("INSERT OR IGNORE INTO people_dismissals VALUES (?, ?, ?)", (*pair, row["source"]))
+        conn.execute("DELETE FROM people_dismissals WHERE person_a = ? OR person_b = ?", (drop, drop))
         conn.execute("DELETE FROM people WHERE id = ?", (drop,))
 
 
@@ -531,29 +624,125 @@ def people_flags(conn) -> list[str]:
                           "LEFT JOIN roster_entries r ON r.person_id = p.id GROUP BY p.id"):
         groups.setdefault(name_key(f"{r['first_name']} {r['last_name']}"), []).append(r)
     flags = []
+    dismissed = {tuple(r) for r in conn.execute("SELECT person_a, person_b FROM people_dismissals")}
     for rows in groups.values():
-        team_sets = [set((r["teams"] or "").split(",")) for r in rows]
-        if any(not (a & b - {""}) for i, a in enumerate(team_sets) for b in team_sets[i + 1:]):
-            who = ", ".join(f"id {r['id']} ({r['teams'] or 'no roster'})" for r in rows)
-            flags.append(f"{rows[0]['first_name']} {rows[0]['last_name']} has {len(rows)} records: {who}; "
-                         "if one person, run merge-people")
+        unresolved = []
+        unresolved_ids = set()
+        for i, a in enumerate(rows):
+            for b in rows[i + 1:]:
+                pair = tuple(sorted((a["id"], b["id"])))
+                if pair in dismissed or (set((a["teams"] or "").split(",")) & set((b["teams"] or "").split(",")) - {""}):
+                    continue
+                who = ", ".join(f"id {r['id']} ({r['teams'] or 'no roster'})" for r in (a, b))
+                unresolved.append(who)
+                unresolved_ids.update(pair)
+        if unresolved:
+            count = len(unresolved_ids)
+            flags.append(f"{rows[0]['first_name']} {rows[0]['last_name']} has {count} records; possible duplicate pairs: "
+                         + "; ".join(unresolved) + "; if one person, run merge-people; otherwise run dismiss-people")
     return flags
+
+
+def _person_exists(conn, person: int):
+    if not conn.execute("SELECT 1 FROM people WHERE id = ?", (person,)).fetchone():
+        raise ValueError(f"no person with id {person}")
+
+
+def add_roster_player(conn, team: str, season: str, name: str | None = None, jersey=None,
+                      person: int | None = None) -> int:
+    """Add a new person, or reuse a known person, on one Season Roster."""
+    validate_season(season)
+    number, label = parse_jersey(jersey)
+    with transaction(conn):
+        if not conn.execute("SELECT 1 FROM teams WHERE id = ?", (team,)).fetchone():
+            raise ValueError(f"no team {team!r}")
+        if person is None:
+            if not name or not clean_name(name):
+                raise ValueError("a new player needs a name")
+            first, last = split_name(name)
+            person = _new_person(conn, first, last, "user roster-add")
+        else:
+            _person_exists(conn, person)
+            if name is not None:
+                raise ValueError("give a person id or a new name, not both")
+        conn.execute("INSERT INTO roster_entries (team_id, season, person_id, jersey, jersey_label, source) "
+                     "VALUES (?, ?, ?, ?, ?, 'user roster-add')", (team, season, person, number, label))
+    return person
+
+
+def rename_player(conn, person: int, name: str):
+    if not name or not clean_name(name):
+        raise ValueError("a player needs a name")
+    first, last = split_name(name)
+    with transaction(conn):
+        _person_exists(conn, person)
+        conn.execute("UPDATE people SET first_name = ?, last_name = ?, source = 'user roster-rename' WHERE id = ?",
+                     (first, last, person))
+
+
+def renumber_player(conn, team: str, season: str, person: int, jersey):
+    validate_season(season)
+    number, label = parse_jersey(jersey)
+    with transaction(conn):
+        result = conn.execute("UPDATE roster_entries SET jersey = ?, jersey_label = ?, source = 'user roster-number' "
+                              "WHERE team_id = ? AND season = ? AND person_id = ?", (number, label, team, season, person))
+        if result.rowcount != 1:
+            raise ValueError(f"person {person} is not on the {team} {season} roster")
+
+
+def set_display_name(conn, person: int, name: str | None):
+    with transaction(conn):
+        _person_exists(conn, person)
+        conn.execute("UPDATE people SET display_name = ?, source = 'user display-name' WHERE id = ?",
+                     (clean_name(name) if name and clean_name(name) else None, person))
+
+
+def set_game_jersey(conn, game: str, team: str, person: int, jersey):
+    number, label = parse_jersey(jersey)
+    with transaction(conn):
+        season = _game(conn, game)["season"]
+        if not conn.execute("SELECT 1 FROM game_teams WHERE game_id = ? AND team_id = ?", (game, team)).fetchone():
+            raise ValueError(f"{team} is not a team in game {game}")
+        used = _roster_season(conn, team, season)
+        if not conn.execute("SELECT 1 FROM roster_entries WHERE team_id = ? AND season = ? AND person_id = ?",
+                            (team, used, person)).fetchone():
+            raise ValueError(f"person {person} is not on the {team} {used or season} roster")
+        old = conn.execute("SELECT team_id FROM game_players WHERE game_id = ? AND person_id = ?", (game, person)).fetchone()
+        if old and old[0] != team:
+            raise ValueError(f"person {person} already plays for {old[0]} in game {game}")
+        conn.execute("INSERT INTO game_players (game_id, team_id, person_id, jersey_worn, jersey_label, source) "
+                     "VALUES (?, ?, ?, ?, ?, 'user game-number') ON CONFLICT(game_id, person_id) DO UPDATE SET "
+                     "jersey_worn = excluded.jersey_worn, jersey_label = excluded.jersey_label, source = excluded.source",
+                     (game, team, person, number, label))
+
+
+def dismiss_people(conn, person_a: int, person_b: int):
+    if person_a == person_b:
+        raise ValueError("a dismissal needs two different people")
+    with transaction(conn):
+        for person in (person_a, person_b):
+            _person_exists(conn, person)
+        conn.execute("INSERT OR REPLACE INTO people_dismissals VALUES (?, ?, 'user dismiss-people')",
+                     tuple(sorted((person_a, person_b))))
 
 
 # --- games ------------------------------------------------------------------------------
 
 def add_game(conn, game_id: str, date: str, team_ids: list[str], focus: str | None = None,
-             folder: str | None = None, source: str = "user", rulebook: str = "usah") -> str:
+             folder: str | None = None, source: str = "user", rulebook: str = "usah",
+             season: str | None = None) -> str:
     """rulebook gives the penalty minutes in the records: 'usah' (USA Hockey) or 'nhl'."""
-    season = season_for(date)
+    default_season = season_for(date)
+    season = validate_season(season) if season is not None else default_season
     source = source_of(source)
     if rulebook not in RULEBOOKS:
         raise ValueError(f"rulebook {rulebook!r} is not one of {', '.join(RULEBOOKS)}")
-    with conn:
+    with transaction(conn):
         conn.execute("INSERT INTO games (id, date, season, focus_team_id, folder, source, rulebook) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?) "
                      "ON CONFLICT(id) DO UPDATE SET date = excluded.date, season = excluded.season, "
-                     "focus_team_id = excluded.focus_team_id, folder = excluded.folder, rulebook = excluded.rulebook",
+                     "focus_team_id = excluded.focus_team_id, folder = excluded.folder, rulebook = excluded.rulebook, "
+                     "source = excluded.source",
                      (game_id, date, season, focus, folder, source, rulebook))
         for tid in team_ids:
             conn.execute("INSERT INTO game_teams (game_id, team_id, source) VALUES (?, ?, ?) "
@@ -573,8 +762,10 @@ def _game_player(conn, game_id, team_id, season, name, jersey, source, note=None
     if not (name and clean_name(name)) and number is None:
         raise ValueError(f"{team_id}: a player needs a name or a jersey")
     pid = find_person(conn, team_id, season, name=name, jersey=number)
-    old = conn.execute("SELECT jersey_worn FROM game_players WHERE game_id = ? AND person_id = ?",
-                       (game_id, pid)).fetchone()
+    old = conn.execute("SELECT jersey_worn, team_id FROM game_players WHERE game_id = ? AND person_id = ?",
+                        (game_id, pid)).fetchone()
+    if old and old["team_id"] != team_id:
+        raise ValueError(f"person {pid} already plays for {old['team_id']} in game {game_id}")
     if old and old[0] is not None and number is not None and old[0] != number:
         raise ValueError(f"{team_id}: {clean_name(name or '#' + str(number))} wore #{old[0]} and #{number} "
                          "in this game; fix one event")
@@ -582,7 +773,7 @@ def _game_player(conn, game_id, team_id, season, name, jersey, source, note=None
                  "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(game_id, person_id) DO UPDATE SET "
                  "jersey_worn = COALESCE(excluded.jersey_worn, game_players.jersey_worn), "
                  "jersey_label = COALESCE(excluded.jersey_label, game_players.jersey_label), "
-                 "note = COALESCE(excluded.note, game_players.note)",
+                  "note = COALESCE(excluded.note, game_players.note), source = excluded.source",
                  (game_id, team_id, pid, number, label, note, source))
     return pid
 
@@ -596,7 +787,7 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
     game = _game(conn, game_id)
     season = game["season"]
     in_game = {r[0] for r in conn.execute("SELECT team_id FROM game_teams WHERE game_id = ?", (game_id,))}
-    with conn:
+    with transaction(conn):
         conn.execute("DELETE FROM event_assists WHERE event_id IN (SELECT id FROM events WHERE game_id = ?)", (game_id,))
         conn.execute("DELETE FROM events WHERE game_id = ? AND parent_event_id IS NOT NULL", (game_id,))
         conn.execute("DELETE FROM events WHERE game_id = ?", (game_id,))
@@ -629,11 +820,11 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
                 raise ValueError(f"event {n}: only a penalty can have additional penalties")
             eid = conn.execute(
                 "INSERT INTO events (game_id, team_id, kind, ordinal, person_id, period, clock, scene, infraction, "
-                "classification, minutes, minutes_rule, unassisted, match_note, note, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 "classification, minutes, minutes_rule, unassisted, match_note, note, source, goal_type) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (game_id, team_id, kind, order[kind], pid, e.get("period"), e.get("game_clock"), e.get("scene"),
                  e.get("infraction"), cls, minutes, rule,
-                 int(not assists) if kind == "goal" else None, e.get("roster_match"), e.get("note"), src)).lastrowid
+                  int(not assists) if kind == "goal" else None, e.get("roster_match"), e.get("note"), src, e.get("type"))).lastrowid
             if kind == "goal":
                 for i, apid in enumerate(assist_ids, start=1):
                     conn.execute("INSERT INTO event_assists (event_id, ordinal, person_id, source) VALUES (?, ?, ?, ?)",
@@ -748,6 +939,7 @@ def snapshot(conn, game_id: str) -> dict:
         out = {k: e[k] for k in ("id", "kind", "ordinal", "parent_event_id", "period", "clock", "scene",
                                  "infraction", "classification", "minutes", "minutes_rule", "note", "source")}
         out["team"] = e["team_id"]
+        out["type"] = e["goal_type"] if "goal_type" in e.keys() else None
         out["person"] = people[e["person_id"]] if e["person_id"] else None
         if e["kind"] == "goal":
             out["assists"] = [people[a["person_id"]] for a in conn.execute(
@@ -771,11 +963,15 @@ def snapshot(conn, game_id: str) -> dict:
         # Points, then goals, then PIM; ties keep the order of first involvement in the game.
         tables[tid] = sorted(rows.values(), key=lambda r: (-r["pts"], -r["g"], -r["pim"], first_event[r["id"]]))
     goals = {tid: sum(e["kind"] == "goal" and e["team"] == tid for e in events) for tid in teams}
+    sheet = json.loads(game["sheet_data"]) if "sheet_data" in game.keys() else {}
+    for rows in sheet.get("goalkeeping", {}).values():
+        for row in rows:
+            row["person"] = people[row.pop("person_id")]
     return {"schema_version": SNAPSHOT_VERSION, "game": {"id": game_id, "date": game["date"], "season": season,
             "rulebook": game["rulebook"],
             "focus_team": game["focus_team_id"], "folder": game["folder"]}, "teams": teams, "score": goals,
             "events": events, "stats": tables, "team_pim": {t: _whole(v) for t, v in team_pim.items()},
-            "flags": game_flags(conn, game_id)}
+            "flags": game_flags(conn, game_id), "sheet": sheet}
 
 
 def write_snapshot(conn, game_id: str, out: str | Path | None = None) -> Path:
@@ -817,6 +1013,32 @@ def main(argv=None) -> int:
     m = sub.add_parser("merge-people")
     m.add_argument("keep", type=int)
     m.add_argument("drop", type=int)
+    a = sub.add_parser("roster-add")
+    a.add_argument("team")
+    a.add_argument("--season", required=True)
+    identity = a.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--name")
+    identity.add_argument("--person", type=int)
+    a.add_argument("--jersey")
+    r = sub.add_parser("roster-rename")
+    r.add_argument("person", type=int)
+    r.add_argument("name")
+    n = sub.add_parser("roster-number")
+    n.add_argument("team")
+    n.add_argument("person", type=int)
+    n.add_argument("jersey", help="number, or '-' for no number")
+    n.add_argument("--season", required=True)
+    j = sub.add_parser("game-number")
+    j.add_argument("game")
+    j.add_argument("team")
+    j.add_argument("person", type=int)
+    j.add_argument("jersey", help="number, or '-' to use the Roster number")
+    d = sub.add_parser("display-name")
+    d.add_argument("person", type=int)
+    d.add_argument("name", help="display name, or empty text to clear it")
+    p = sub.add_parser("dismiss-people")
+    p.add_argument("person_a", type=int)
+    p.add_argument("person_b", type=int)
     args = ap.parse_args(argv)
     conn = connect(args.db or db_path(args.config_dir))
     if args.cmd == "init":
@@ -842,6 +1064,20 @@ def main(argv=None) -> int:
     elif args.cmd == "merge-people":
         merge_people(conn, args.keep, args.drop)
         print(f"[team_db] merged person {args.drop} into {args.keep}")
+    elif args.cmd == "roster-add":
+        person = add_roster_player(conn, args.team, args.season, args.name, args.jersey, args.person)
+        print(f"[team_db] added person {person} to {args.team} {args.season}")
+    elif args.cmd == "roster-rename":
+        rename_player(conn, args.person, args.name)
+    elif args.cmd == "roster-number":
+        renumber_player(conn, args.team, args.season, args.person, None if args.jersey == "-" else args.jersey)
+    elif args.cmd == "game-number":
+        set_game_jersey(conn, args.game, args.team, args.person, None if args.jersey == "-" else args.jersey)
+    elif args.cmd == "display-name":
+        set_display_name(conn, args.person, args.name)
+    elif args.cmd == "dismiss-people":
+        dismiss_people(conn, args.person_a, args.person_b)
+    conn.close()
     return 0
 
 

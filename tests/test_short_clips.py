@@ -302,7 +302,7 @@ def test_short_runner_registers_outputs_and_invalidates_changed_inputs(tmp_path)
     assert stage.fingerprint(ctx) != second
 
 
-def test_short_cli_writes_compilation_and_three_goal_outputs(tmp_path):
+def test_short_cli_writes_compilation_and_three_goal_outputs(tmp_path, freeze_sheet):
     import subprocess
     import json
     source = tmp_path / "synthetic.mp4"
@@ -314,6 +314,8 @@ def test_short_cli_writes_compilation_and_three_goal_outputs(tmp_path):
         "primary_cam": "cam1", "detection_s": i*10.}} for i in range(1, 4)], "plays": []}
     sheet = {"teams": {"home": "Red", "away": "Blue"}, "goals": {"home": [], "away": [
         {"scorer": "12", "assists": [], "per": "1"} for _ in range(3)]}}
+    sheet["rosters"] = {"home": {}, "away": {"12": "Blue Skater"}}
+    freeze_sheet(sheet, {"focus_team": "Blue"})
     for name, data in [("selection.json", selection), ("game_sheet.json", sheet),
                        ("rois.json", {"camera_1": {"net": [500, 250, 100, 100]}})]:
         (tmp_path / name).write_text(json.dumps(data))
