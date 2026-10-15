@@ -181,7 +181,14 @@ def plan_short(selection: dict, layouts: dict, *, rois=None, sheet=None, bar_s=2
             data = goal_data(sheet, item["id"])
             clip["caption"] = f"GOAL {data['scorer']}"
         elif item["kind"] == "penalty":
-            clip["caption"] = item.get("caption") or item.get("label") or "PENALTY"
+            if "_final" in sheet and item["id"].startswith("penalty:"):
+                from recap_graphics import player_name
+                _, side, index = item["id"].split(":")
+                row = sheet["penalties"][side][int(index) - 1]
+                label = row.get("infraction") or "TEAM PENALTY"
+                clip["caption"] = f"PENALTY {label if row.get('team_only') else player_name(sheet, side, row['player'])}"
+            else:
+                clip["caption"] = item.get("caption") or item.get("label") or "PENALTY"
         goals = selection.get("goals") or []
 
         def expected(goal):
@@ -550,7 +557,9 @@ def main(argv=None) -> int:
         selection = load_play_reviews(root, json.loads((root / "selection.json").read_text()))
         selection["plays"] = [p for p in selection.get("plays", [])
                               if p.get("review_status") not in ("reject", "uncertain")]
-        sheet = json.loads((root / "game_sheet.json").read_text())
+        from game_data import load_graphics_inputs, validate_selection
+        sheet, options = load_graphics_inputs(root, options)
+        validate_selection(sheet, selection)
         flags = list(selection.get("flags") or []) + list(selection.get("input_flags") or [])
         manifest_path = Path((options.get("audio") or {}).get("manifest") or DEFAULT_MANIFEST).expanduser()
         key = f"{options.get('date', sheet.get('date', 'unknown'))}|{sheet['teams']['home']}-vs-{sheet['teams']['away']}|Short"

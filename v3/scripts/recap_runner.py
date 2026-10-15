@@ -371,7 +371,9 @@ def _fp_scoresheet(ctx):
     root = str(ctx.game_folder)
     return {"sheets": [file_identity(p) for p in find_scoresheet_pdfs(root) + find_scoresheet_photos(root)[:1]],
             "overrides": _file_hash(ctx.game_folder / "game_sheet_overrides.json"),
-            "scripts": [_file_hash(HERE / n) for n in ("scoresheet.py", "gamesheet_pdf.py")]}
+            "data_options": {k: ctx.options.get(k) for k in ("date", "focus_team", "league_rules")},
+            "config_dir": (ctx.options.get("_layers") or {}).get("config_dir"),
+            "scripts": [_file_hash(HERE / n) for n in ("scoresheet.py", "gamesheet_pdf.py", "game_data.py", "team_db.py")]}
 
 
 def _run_scoresheet(ctx):
@@ -384,7 +386,17 @@ def _run_scoresheet(ctx):
                            "ML stack missing")
     if rc != 0:
         return StageResult("failed", [f"Scoresheet reader failed: {_last_error(lines)}"], _last_error(lines))
+    from game_data import import_snapshot
+    from team_db import connect, db_path
+    sheet = json.loads((ctx.game_folder / "game_sheet.json").read_text())
+    path = db_path((ctx.options.get("_layers") or {}).get("config_dir"))
+    conn = connect(path)
+    try:
+        data = import_snapshot(conn, ctx.game_folder.name, sheet, ctx.options, ctx.game_folder)
+    finally:
+        conn.close()
     flags = []
+    flags.extend(data["flags"])
     try:
         sheet = json.loads((ctx.game_folder / "game_sheet.json").read_text())
         rows = [r for side in ("goals", "penalties") for team in ("home", "away") for r in sheet[side][team]]
@@ -723,6 +735,17 @@ def graphics_options(ctx) -> dict:
                                   ("teams", "focus_team", "perspective", "kit", "start", "date", "_layers")}))
 
 
+def frozen_graphics_options(ctx) -> dict:
+    from game_data import load_graphics_inputs
+    options = graphics_options(ctx)
+    if (ctx.game_folder / "game_data.json").exists():
+        _, options = load_graphics_inputs(ctx.game_folder, options)
+    else:
+        # A missing snapshot must not make live Roster data a graphics input.
+        options.update(teams={}, focus_team=None, date=None)
+    return options
+
+
 def _graphics_outputs(ctx):
     from recap_graphics import graphics_output_name
     return ["recap_graphics_props.json", "recap_graphics.json", graphics_output_name(_mix_plan_output(ctx))]
@@ -733,9 +756,9 @@ def _fp_graphics(ctx):
     root = ctx.game_folder
     video = _mix_outputs(ctx)[1]
     inputs: dict = {name: _file_hash(root / name) for name in
-              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_sheet.json", "play_review.json")}
+              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_data.json", "play_review.json")}
     inputs[video] = file_identity(root / video)
-    options = graphics_options(ctx)
+    options = frozen_graphics_options(ctx)
     logos = {}
     for key, team in (options.get("teams") or {}).items():
         for asset in ("logo", "wordmark", "lockup", "crest"):
@@ -744,7 +767,7 @@ def _fp_graphics(ctx):
         for kit, values in (team.get("kits") or {}).items():
             if isinstance(values, dict) and values.get("crest"):
                 logos[f"{key}:kit:{kit}:crest"] = _file_hash(logo_path(values["crest"], options))
-    sources = [HERE / "recap_graphics.py", HERE / "audio_mix.py", HERE / "recap_assembly.py", PACKAGE / "render.mjs",
+    sources = [HERE / "recap_graphics.py", HERE / "game_data.py", HERE / "audio_mix.py", HERE / "recap_assembly.py", PACKAGE / "render.mjs",
                PACKAGE / "package.json", PACKAGE / "package-lock.json"]
     sources.extend(sorted((PACKAGE / "src").glob("*")))
     sources.extend(sorted((PACKAGE / "public").glob("*")))
@@ -769,7 +792,7 @@ def _run_graphics(ctx):
 
 def short_options(ctx):
     options = assembly_options(ctx)
-    options.update(graphics_options(ctx))
+    options.update(frozen_graphics_options(ctx))
     options["audio"] = mix_options(ctx).get("audio")
     return options
 
@@ -797,12 +820,12 @@ def _fp_short(ctx):
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return {"inputs": {name: _file_hash(root / name) for name in
-                       ("selection.json", "play_review.json", "game_sheet.json", "music_spans.json", "rois.json", "rois_auto.json",
+                       ("selection.json", "play_review.json", "game_data.json", "music_spans.json", "rois.json", "rois_auto.json",
                          "cam1_concat.txt", "cam2_concat.txt", "chapters.json", "coverage.json")},
             "files": [file_identity(p) for p in camera_files(root)], "options": short_options(ctx),
             "manifest": _file_hash(manifest), "media": media, "rife_ready": rife_ready(),
             "scripts": {name: _file_hash(HERE / name) for name in
-                         ("short_clips.py", "recap_assembly.py", "audio_mix.py", "cue_library.py", "recap_graphics.py", "selection.py")}}
+                         ("short_clips.py", "game_data.py", "recap_assembly.py", "audio_mix.py", "cue_library.py", "recap_graphics.py", "selection.py")}}
 
 
 def _run_short(ctx):
@@ -835,7 +858,7 @@ STAGES: list[Stage] = [
     Stage("coverage", "Find periods, game start and end, coverage", _fp_coverage,
           lambda c: ["coverage.json"], _run_coverage,
           needs=("audio", "detection"), needs_two_cameras=True),
-    Stage("scoresheet", "Read Scoresheet / GameSheet", _fp_scoresheet, lambda c: ["game_sheet.json"],
+    Stage("scoresheet", "Read Scoresheet / GameSheet", _fp_scoresheet, lambda c: ["game_sheet.json", "game_data.json"],
           _run_scoresheet),
     Stage("selection", "Locate Game Sheet goals", _fp_selection, lambda c: ["selection.json"],
           _run_selection, needs=("coverage", "scoresheet", "audio", "detection")),

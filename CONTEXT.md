@@ -72,7 +72,7 @@ _Avoid_: Lineup, Player list
 **League**: The competition a game belongs to. Fixes the game rules every game in it shares: clock mode (running or stop time), whether Scoresheet times count elapsed or remaining, number of periods (usually 3), period length, the break between periods (usually about 1 min, no resurface), penalty lengths and the rulebook for penalty minutes in the records (USA Hockey by default), and how a tie ends (overtime, shootout, or tie) — which may differ between regular season and playoffs. Teams switch ends every period in all Leagues.
 _Avoid_: Division, Season
 
-**Season**: The year a Roster belongs to, written 2026-2027. It starts on 1 August. A League's rules can also differ between regular season and playoffs; that is a League setting, not a Season.
+**Season**: The year a Roster belongs to, written 2026-2027. It starts on 1 August unless the League specifies another start. A League's rules can also differ between regular season and playoffs; that is a League setting, not a Season.
 _Avoid_: Year
 
 **Sub**: A rostered, part-time player on a team. Listed on the Scoresheet like any other player when present.

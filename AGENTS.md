@@ -82,6 +82,7 @@ game_folder/
   game_sheet_read.json ← raw Scoresheet read + source identity (reused until the sheet changes)
   game_sheet_overrides.json ← optional user corrections (docs/scoresheet-overrides.md)
   game_sheet.json    ← read with overrides applied; downstream stages use this file
+  game_data.json     ← frozen database snapshot; graphics use its names, numbers, score, and stats (ADR-0004)
   recap_options.json ← per-game options (hockeyrecap); inferred values marked
   recap_status.json  ← stage states, fingerprints, flags (hockeyrecap status)
   recap.log          ← full log of all stage output

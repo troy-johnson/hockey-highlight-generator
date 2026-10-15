@@ -238,7 +238,8 @@ def test_overrides_apply_on_every_run_without_a_second_read(tmp_path, monkeypatc
     pen = sheet["penalties"]["home"][0]
     assert (pen["player"], pen["infraction"], pen["minutes"], pen["status"]) == ("73", "TRIP", "2", "ok")
     assert sheet["shots_on_goal"] == {"home": [10, 4, 6], "away": [10, 13, 9]}
-    assert sheet["goalkeeping"]["home"] == [{"player": "59", "name": "Joe Shiflett"}]
+    assert sheet["goalkeeping"]["home"] == [{"player": "59", "name": "Joe Shiflett",
+                                               "source": "override game_sheet_overrides.json"}]
     assert json.loads((tmp_path / "game_sheet_read.json").read_text())["sheet"]["goals"]["away"][1]["type"] == "PP"
 
 

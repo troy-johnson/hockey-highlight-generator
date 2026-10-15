@@ -423,9 +423,12 @@ def check_penalties(pens: list[dict], roster: dict[str, str], opp_goals: list[di
                            f"and no other-team goal at {p.get('on')} ended it")
         if parse_time(p.get("off")) is None:
             reasons.append(f"time '{p.get('off')}' is not a valid clock time")
-        out.append({"per": per, "player": num, "infraction": str(p.get("infraction", "")).strip().upper(),
-                    "minutes": mins, "off": _clean(p.get("off")), "start": _clean(p.get("start")), "on": _clean(p.get("on")),
-                    "status": "review" if reasons else "ok", "reasons": reasons})
+        row = {"per": per, "player": num, "infraction": str(p.get("infraction", "")).strip().upper(),
+               "minutes": mins, "off": _clean(p.get("off")), "start": _clean(p.get("start")), "on": _clean(p.get("on")),
+               "status": "review" if reasons else "ok", "reasons": reasons}
+        if p.get("classification"):
+            row["classification"] = p["classification"]
+        out.append(row)
     return out
 
 
@@ -599,11 +602,18 @@ def apply_overrides(sheet: dict, overrides: dict, *, check_rows: bool = True) ->
         if not isinstance(entries, dict):
             raise ValueError(f"rosters.{side}: expected an object of number: name")
         roster = out.setdefault("rosters", {}).setdefault(side, {})
+        from team_db import parse_jersey
         for num, name in entries.items():
+            # A correction to 08 also replaces 8, rather than adding a second claim.
+            number, _ = parse_jersey(num)
+            for old in list(roster):
+                if parse_jersey(old)[0] == number:
+                    roster.pop(old)
             if name is None:
-                roster.pop(str(num), None)
+                continue
             elif isinstance(name, str):
                 roster[str(num)] = name
+                out.setdefault("roster_sources", {}).setdefault(side, {})[str(num)] = "override game_sheet_overrides.json"
             else:
                 raise ValueError(f"rosters.{side}.{num}: expected a name or null")
     for key, label in (("goals", "goal"), ("penalties", "penalty")):
@@ -643,7 +653,7 @@ def apply_overrides(sheet: dict, overrides: dict, *, check_rows: bool = True) ->
     for side, rows in _side_map(overrides, "goalkeeping").items():
         if not isinstance(rows, list) or not all(isinstance(r, dict) and "player" in r for r in rows):
             raise ValueError(f"goalkeeping.{side}: expected a list of rows with 'player'")
-        out.setdefault("goalkeeping", {})[side] = rows
+        out.setdefault("goalkeeping", {})[side] = [dict(r, source="override game_sheet_overrides.json") for r in rows]
     if "date" in overrides:
         if not isinstance(overrides["date"], str) or not overrides["date"].strip():
             raise ValueError("date: expected text such as 2026-02-01")
