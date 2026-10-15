@@ -154,7 +154,7 @@ MIGRATIONS = [
 
 # Penalty classes and the minutes each puts in the records (not the time served on the clock).
 # USA Hockey 2025-29 Official Rules, Rules 401-406 (Adult: minors 2:00, majors 5:00).
-# NHL Official Rules 2024-2025, Section 4, Rules 16-24.
+# NHL Official Rules 2026-2027, Section 4, Rules 16-24 (values unchanged from 2024-2025).
 RULEBOOKS = {
     "usah": {
         "MINOR": (2, "USA Hockey 402"),
