@@ -75,7 +75,7 @@ def test_import_team_keeps_identity_assets_and_extra_fields(conn, teams):
     db.import_team(conn, teams / "icepak.json", "2026-2027")
     row = conn.execute("SELECT * FROM teams WHERE id = 'icepak'").fetchone()
     assert json.loads(row["kits"])["red"]["fill"] == "#A60735"
-    assert json.loads(row["assets"]) == {"logo": "/nas/icepak.png"}
+    assert json.loads(row["assets"]) == {"logo": {"path": "/nas/icepak.png", "source": "import icepak.json"}}
     assert json.loads(row["extra"])["team_manager"] == "Sample Manager"
 
 
@@ -155,3 +155,30 @@ def test_write_snapshot_and_cli(tmp_path, conn, game):
     data = json.loads(out.read_text())
     assert data["schema_version"] == db.SNAPSHOT_VERSION and data["game"]["season"] == "2026-2027"
     assert db.main(["--db", str(tmp_path / "hockey.db"), "flags", game]) == 0
+
+
+def test_version_1_database_upgrades_in_place(tmp_path):
+    import sqlite3
+    path = tmp_path / "hockey.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(db.MIGRATIONS[0])
+    raw.execute("INSERT INTO teams (id, name, source) VALUES ('icepak', 'Ice Pak', 'import x')")
+    raw.execute("PRAGMA user_version = 1")
+    raw.commit()
+    raw.close()
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    assert conn.execute("SELECT name FROM teams").fetchone()[0] == "Ice Pak"
+    assert "jersey_label" in {r[1] for r in conn.execute("PRAGMA table_info(roster_entries)")}
+
+
+def test_failed_migration_leaves_previous_version(tmp_path, monkeypatch):
+    path = tmp_path / "hockey.db"
+    db.connect(path).close()
+    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, "CREATE TABLE ok_part (x); CREATE TABLE teams (x)"])
+    import sqlite3
+    with pytest.raises(sqlite3.OperationalError):
+        db.connect(path)
+    raw = sqlite3.connect(path)
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS) - 1
+    assert not raw.execute("SELECT name FROM sqlite_master WHERE name = 'ok_part'").fetchone()
