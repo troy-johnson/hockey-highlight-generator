@@ -108,7 +108,7 @@ def test_snapshot_stats_score_and_numbers_worn(conn, game):
     assert (ipk["JD Mohr"]["g"], ipk["JD Mohr"]["jersey"]) == (1, 56)
     assert (ipk["Chris Browne"]["a"], ipk["Chris Browne"]["jersey"]) == (1, None)
     blb = {r["name"]: r for r in snap["stats"]["blb"]}
-    assert blb["Kenyon Ross"]["pim"] == 5          # game misconduct has no minutes
+    assert blb["Kenyon Ross"]["pim"] == 15         # major 5 + game misconduct 10 (USA Hockey 404(b) Note 2)
     assert blb["Jenner Smith"]["g"] == 1           # matched by jersey only
     goals = [e for e in snap["events"] if e["kind"] == "goal"]
     assert goals[0]["unassisted"] and not goals[1]["unassisted"]
@@ -122,7 +122,7 @@ def test_number_worn_wins_and_is_flagged(conn, game):
     assert any("Kenyon Ross wore #7" in f and "#77" in f for f in flags)
     assert any("#77 is shared by 2" in f for f in flags)
     assert any("Chris Browne has no number" in f for f in flags)
-    assert any("GAME MISCONDUCT has no minutes" in f for f in flags)
+    assert not any("has no minutes" in f for f in flags)
 
 
 def test_misconduct_is_linked_to_its_major(conn, game):
@@ -182,3 +182,37 @@ def test_failed_migration_leaves_previous_version(tmp_path, monkeypatch):
     raw = sqlite3.connect(path)
     assert raw.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS) - 1
     assert not raw.execute("SELECT name FROM sqlite_master WHERE name = 'ok_part'").fetchone()
+
+
+def test_game_misconduct_gets_usa_hockey_record_minutes(conn, game):
+    gm = next(e for e in db.snapshot(conn, game)["events"] if e["classification"] == "GAME MISCONDUCT")
+    assert (gm["minutes"], gm["minutes_rule"]) == (10, "USA Hockey 404(b) Note 2")
+
+
+@pytest.mark.parametrize("rulebook,match", [("usah", 10), ("nhl", 15)])
+def test_match_penalty_record_minutes_follow_the_rulebook(rulebook, match):
+    assert db.penalty_minutes(rulebook, "Match", None)[1] == match
+
+
+@pytest.mark.parametrize("value,want", [("minor", "MINOR"), ("Bench  Minor", "BENCH MINOR"), ("GM", "GAME MISCONDUCT"),
+                                        ("double-minor", "DOUBLE MINOR"), ("penalty_shot", "PENALTY SHOT")])
+def test_penalty_class_names(value, want):
+    assert db.penalty_class(value) == want
+
+
+@pytest.mark.parametrize("value", ["5 and game", "MAJOR + GAME MISCONDUCT", "gross misconduct"])
+def test_unknown_or_combined_penalty_class_is_rejected(value):
+    with pytest.raises(ValueError, match="not one of"):
+        db.penalty_class(value)
+
+
+def test_given_minutes_that_differ_from_the_rulebook_are_flagged(conn, game):
+    db.import_events(conn, game, [{"event": "PENALTY", "team": "Buzz Light Beer", "player": "Kenyon Ross",
+                                   "jersey": 77, "classification": "MINOR", "minutes": 1.5}],
+                     {"Ice Pak": "icepak", "Buzz Light Beer": "blb"})
+    assert any("MINOR has 1.5 min; USA Hockey 402 records 2" in f for f in db.game_flags(conn, game))
+
+
+def test_unknown_rulebook_is_rejected(conn):
+    with pytest.raises(ValueError, match="rulebook"):
+        db.add_game(conn, "g", "2026-10-11", [], rulebook="khl")

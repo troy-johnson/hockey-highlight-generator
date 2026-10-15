@@ -14,6 +14,8 @@ Rules:
 - An unknown name stops the import with the closest Roster matches.
 - The number worn in a game wins over the Roster and is flagged when they differ.
 - 08 and 8 are the same number; the printed form is kept as a label.
+- Penalty classes follow the game's rulebook (USA Hockey by default, or NHL). A penalty
+  without minutes gets the minutes that rulebook puts in the records (game misconduct: 10).
 - Every record keeps its source: sheet, override, user, or import.
 
 Renders read a per-game snapshot (game_data.json in the Game Folder) written
@@ -21,7 +23,7 @@ by write_snapshot(), so a past render can be repeated after a Roster changes.
 
   team_db.py init
   team_db.py import-team <teams/x.json> --season 2026-2027
-  team_db.py import-events <events.json> --game <id> --date YYYY-MM-DD --teams a,b [--focus a] [--folder DIR]
+  team_db.py import-events <events.json> --game <id> --date YYYY-MM-DD --teams a,b [--focus a] [--folder DIR] [--rulebook usah|nhl]
   team_db.py snapshot <game id> [--out FILE]
   team_db.py flags <game id>
   team_db.py people-flags
@@ -33,6 +35,7 @@ import argparse
 import datetime as dt
 import difflib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -46,7 +49,7 @@ from recap_options import config_dir
 
 DB_FILE = "hockey.db"
 SNAPSHOT_FILE = "game_data.json"
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 SOURCES = ("sheet", "override", "user", "import")
 MAX_ASSISTS = 2
 
@@ -143,7 +146,39 @@ MIGRATIONS = [
     ALTER TABLE event_assists ADD COLUMN source TEXT;
     ALTER TABLE events ADD COLUMN match_note TEXT;
     """,
+    """
+    ALTER TABLE games ADD COLUMN rulebook TEXT NOT NULL DEFAULT 'usah';
+    ALTER TABLE events ADD COLUMN minutes_rule TEXT;
+    """,
 ]
+
+# Penalty classes and the minutes each puts in the records (not the time served on the clock).
+# USA Hockey 2025-29 Official Rules, Rules 401-406 (Adult: minors 2:00, majors 5:00).
+# NHL Official Rules 2024-2025, Section 4, Rules 16-24.
+RULEBOOKS = {
+    "usah": {
+        "MINOR": (2, "USA Hockey 402"),
+        "BENCH MINOR": (2, "USA Hockey 402(b)"),
+        "DOUBLE MINOR": (4, "USA Hockey 402, two minors"),
+        "MAJOR": (5, "USA Hockey 403(a)"),
+        "MISCONDUCT": (10, "USA Hockey 404(a)"),
+        "GAME MISCONDUCT": (10, "USA Hockey 404(b) Note 2"),
+        "MATCH": (10, "USA Hockey 405(a) Note"),
+        "PENALTY SHOT": (0, "USA Hockey 406"),
+    },
+    "nhl": {
+        "MINOR": (2, "NHL 16.1"),
+        "BENCH MINOR": (2, "NHL 17.1"),
+        "DOUBLE MINOR": (4, "NHL 18.1"),
+        "MAJOR": (5, "NHL 20.1"),
+        "MISCONDUCT": (10, "NHL 22.1"),
+        "GAME MISCONDUCT": (10, "NHL 23.1"),
+        "MATCH": (15, "NHL 21.1"),
+        "PENALTY SHOT": (0, "NHL 24.1"),
+    },
+}
+CLASS_ALIASES = {"GM": "GAME MISCONDUCT", "GMC": "GAME MISCONDUCT", "MATCH PENALTY": "MATCH",
+                 "10 MIN MISCONDUCT": "MISCONDUCT", "DOUBLE-MINOR": "DOUBLE MINOR", "BENCH": "BENCH MINOR"}
 
 
 def db_path(override: str | None = None) -> Path:
@@ -190,7 +225,7 @@ def season_for(date: str) -> str:
 def source_of(value: str | None, default: str = "user") -> str:
     """A source must start with sheet, override, user, or import; details may follow."""
     text = " ".join(str(value or default).split())
-    if not text.casefold().startswith(SOURCES):
+    if not re.match(rf"(?:{'|'.join(SOURCES)})\b", text.casefold()):
         raise ValueError(f"source {text!r} must start with one of {', '.join(SOURCES)}")
     return text
 
@@ -220,8 +255,10 @@ def parse_jersey(value) -> tuple[int | None, str | None]:
     if isinstance(value, bool):
         raise ValueError(f"jersey {value!r} is not a number")
     if isinstance(value, int):
+        if value < 0:
+            raise ValueError(f"jersey {value!r} is not a number")
         return value, None
-    text = str(value).strip().lstrip("#")
+    text = str(value).strip().removeprefix("#")
     if not text.isdigit():
         raise ValueError(f"jersey {value!r} is not a number")
     number = int(text)
@@ -232,7 +269,11 @@ def parse_minutes(value) -> float | None:
     """2, '2', '2+10' (12), '5:00' (5). None means not recorded."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, bool):
+        raise ValueError(f"penalty minutes {value!r} are not a number")
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"penalty minutes {value!r} must be a finite number of 0 or more")
         return float(value)
     text = str(value).strip()
     if re.fullmatch(r"\d+(\.\d+)?(\s*\+\s*\d+(\.\d+)?)*", text):
@@ -241,6 +282,28 @@ def parse_minutes(value) -> float | None:
         m, s = map(int, text.split(":"))
         return m + s / 60
     raise ValueError(f"penalty minutes {value!r} are not a number, a sum like 2+10, or m:ss")
+
+
+def penalty_class(value) -> str | None:
+    """Return the rulebook class name, such as 'GAME MISCONDUCT'. None means not recorded."""
+    if value is None or not str(value).strip():
+        return None
+    text = " ".join(str(value).upper().replace("_", " ").split())
+    text = CLASS_ALIASES.get(text, text)
+    if text not in RULEBOOKS["usah"]:
+        raise ValueError(f"penalty class {value!r} is not one of {', '.join(RULEBOOKS['usah'])}; "
+                         "give each class as its own (additional) penalty")
+    return text
+
+
+def penalty_minutes(rulebook: str, classification, minutes) -> tuple[str | None, float | None, str | None]:
+    """(class, record minutes, rule). Given minutes win; missing minutes come from the rulebook."""
+    cls = penalty_class(classification)
+    given = parse_minutes(minutes)
+    if given is not None or cls is None:
+        return cls, given, None
+    record, rule = RULEBOOKS[rulebook][cls]
+    return cls, float(record), rule
 
 
 def _whole(value: float):
@@ -276,15 +339,25 @@ def _roster_season(conn, team_id: str, season: str) -> str | None:
     return row[0]
 
 
-def _match_for_import(conn, team_id: str, first: str, last: str, jersey: int | None, used: set[int]) -> int | None:
-    """Reuse a person already on this team (any Season) on a reimport; never merge two rows of one file."""
+def _match_for_import(conn, team_id: str, first: str, last: str, jersey: int | None, used: set[int],
+                      exact: bool = False) -> int | None:
+    """Reuse a person already on this team (any Season) on a reimport; never merge two rows of one file.
+
+    exact=True matches only a person who wore this number in some Season.
+    """
     key = name_key(f"{first} {last}")
     hits = {}
     for r in _team_people(conn, team_id):
         if r["id"] not in used and key in _keys(r):
             hits.setdefault(r["id"], set()).add(r["jersey"])
-    if len(hits) > 1 and jersey is not None:
-        hits = {pid: nums for pid, nums in hits.items() if jersey in nums}
+    if exact:
+        hits = {pid: nums for pid, nums in hits.items() if jersey is not None and jersey in nums}
+    elif len(hits) > 1 and jersey is not None:
+        same = {pid: nums for pid, nums in hits.items() if jersey in nums}
+        if not same:
+            raise ValueError(f"{team_id}: {first} {last} #{jersey} could be any of {len(hits)} people with that name; "
+                             "keep their earlier numbers or merge by hand")
+        hits = same
     if len(hits) == 1:
         return next(iter(hits))
     if hits:
@@ -335,7 +408,7 @@ def import_team(conn, path: str | Path, season: str, source: str | None = None) 
             (team_id, clean_name(cfg["name"]), cfg.get("short_name"), int(bool(cfg.get("own_team"))),
              json.dumps(cfg.get("colors") or {}), json.dumps(cfg.get("kits") or {}), json.dumps(assets),
              json.dumps(extra), source))
-        used: set[int] = set()
+        parsed = []
         for i, row in enumerate(rows, start=1):
             if row.get("first_name") and row.get("last_name"):
                 first, last = clean_name(row["first_name"]), clean_name(row["last_name"])
@@ -343,9 +416,21 @@ def import_team(conn, path: str | Path, season: str, source: str | None = None) 
                 first, last = split_name(row["name"])
             else:
                 raise ValueError(f"{path.name}: roster row {i} has no name")
-            jersey, label = parse_jersey(row.get("jersey"))
+            parsed.append((row, first, last, *parse_jersey(row.get("jersey"))))
+        # Rows whose name and number both match a known person claim that person first,
+        # so row order cannot give an old player's record to a new namesake.
+        used: set[int] = set()
+        matched = {}
+        for i, (row, first, last, jersey, _) in enumerate(parsed):
+            pid = _match_for_import(conn, team_id, first, last, jersey, used, exact=True)
+            if pid is not None:
+                matched[i] = pid
+                used.add(pid)
+        for i, (row, first, last, jersey, label) in enumerate(parsed):
             row_source = source_of(row.get("jersey_source") or row.get("source") or source)
-            pid = _match_for_import(conn, team_id, first, last, jersey, used)
+            pid = matched.get(i)
+            if pid is None:
+                pid = _match_for_import(conn, team_id, first, last, jersey, used)
             if pid is None:
                 pid = _new_person(conn, first, last, row_source, row.get("display_name"))
             elif row.get("display_name"):
@@ -383,7 +468,11 @@ def find_person(conn, team_id: str, season: str, name: str | None = None, jersey
         key = name_key(name)
         hits = [r for r in rows if key in _keys(r)]
         if len(hits) > 1 and number is not None:
-            hits = [r for r in hits if r["jersey"] == number]
+            same = [r for r in hits if r["jersey"] == number]
+            if not same:
+                listed = ", ".join(f"#{r['jersey']}" for r in hits)
+                raise ValueError(f"{team_id}: {clean_name(name)!r} is {len(hits)} people ({listed}); none wears #{number}")
+            hits = same
         if len(hits) == 1:
             return hits[0]["id"]
         if hits:
@@ -414,6 +503,12 @@ def merge_people(conn, keep: int, drop: int) -> None:
     """Make two person records one (for example the same player on two teams), after review."""
     if keep == drop:
         raise ValueError("keep and drop are the same person")
+    for pid in (keep, drop):
+        if not conn.execute("SELECT 1 FROM people WHERE id = ?", (pid,)).fetchone():
+            raise ValueError(f"no person with id {pid}")
+    if conn.execute("SELECT 1 FROM family_links WHERE (parent_id = ? AND child_id = ?) OR (parent_id = ? AND child_id = ?)",
+                    (keep, drop, drop, keep)).fetchone():
+        raise ValueError(f"people {keep} and {drop} are linked as family; not one person")
     with conn:
         for table, keys in (("roster_entries", "team_id, season"), ("game_players", "game_id")):
             clash = conn.execute(f"SELECT COUNT(*) FROM {table} a JOIN {table} b USING ({keys}) "
@@ -438,7 +533,7 @@ def people_flags(conn) -> list[str]:
     flags = []
     for rows in groups.values():
         team_sets = [set((r["teams"] or "").split(",")) for r in rows]
-        if len(rows) > 1 and not any(a & b - {""} for i, a in enumerate(team_sets) for b in team_sets[i + 1:]):
+        if any(not (a & b - {""}) for i, a in enumerate(team_sets) for b in team_sets[i + 1:]):
             who = ", ".join(f"id {r['id']} ({r['teams'] or 'no roster'})" for r in rows)
             flags.append(f"{rows[0]['first_name']} {rows[0]['last_name']} has {len(rows)} records: {who}; "
                          "if one person, run merge-people")
@@ -448,14 +543,18 @@ def people_flags(conn) -> list[str]:
 # --- games ------------------------------------------------------------------------------
 
 def add_game(conn, game_id: str, date: str, team_ids: list[str], focus: str | None = None,
-             folder: str | None = None, source: str = "user") -> str:
+             folder: str | None = None, source: str = "user", rulebook: str = "usah") -> str:
+    """rulebook gives the penalty minutes in the records: 'usah' (USA Hockey) or 'nhl'."""
     season = season_for(date)
     source = source_of(source)
+    if rulebook not in RULEBOOKS:
+        raise ValueError(f"rulebook {rulebook!r} is not one of {', '.join(RULEBOOKS)}")
     with conn:
-        conn.execute("INSERT INTO games (id, date, season, focus_team_id, folder, source) VALUES (?, ?, ?, ?, ?, ?) "
+        conn.execute("INSERT INTO games (id, date, season, focus_team_id, folder, source, rulebook) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?) "
                      "ON CONFLICT(id) DO UPDATE SET date = excluded.date, season = excluded.season, "
-                     "focus_team_id = excluded.focus_team_id, folder = excluded.folder",
-                     (game_id, date, season, focus, folder, source))
+                     "focus_team_id = excluded.focus_team_id, folder = excluded.folder, rulebook = excluded.rulebook",
+                     (game_id, date, season, focus, folder, source, rulebook))
         for tid in team_ids:
             conn.execute("INSERT INTO game_teams (game_id, team_id, source) VALUES (?, ?, ?) "
                          "ON CONFLICT(game_id, team_id) DO NOTHING", (game_id, tid, source))
@@ -471,6 +570,8 @@ def _game(conn, game_id: str) -> sqlite3.Row:
 
 def _game_player(conn, game_id, team_id, season, name, jersey, source, note=None) -> int:
     number, label = parse_jersey(jersey)
+    if not (name and clean_name(name)) and number is None:
+        raise ValueError(f"{team_id}: a player needs a name or a jersey")
     pid = find_person(conn, team_id, season, name=name, jersey=number)
     old = conn.execute("SELECT jersey_worn FROM game_players WHERE game_id = ? AND person_id = ?",
                        (game_id, pid)).fetchone()
@@ -515,7 +616,10 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
                 pid = None  # team or bench penalty: no player
             else:
                 pid = _game_player(conn, game_id, team_id, season, name, e.get("jersey"), src, e.get("jersey_note"))
-            minutes = parse_minutes(e.get("minutes")) if kind == "penalty" else None
+            if kind == "penalty":
+                cls, minutes, rule = penalty_minutes(game["rulebook"], e.get("classification"), e.get("minutes"))
+            else:
+                cls, minutes, rule = None, None, None
             assists = e.get("assists") or []
             if kind == "goal":
                 assist_ids = _assist_ids(conn, game_id, team_id, season, in_game, assists, pid, src, n)
@@ -525,10 +629,11 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
                 raise ValueError(f"event {n}: only a penalty can have additional penalties")
             eid = conn.execute(
                 "INSERT INTO events (game_id, team_id, kind, ordinal, person_id, period, clock, scene, infraction, "
-                "classification, minutes, unassisted, match_note, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "classification, minutes, minutes_rule, unassisted, match_note, note, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (game_id, team_id, kind, order[kind], pid, e.get("period"), e.get("game_clock"), e.get("scene"),
-                 e.get("infraction"), e.get("classification"), minutes,
-                 int(not assists) if kind == "goal" else None, e.get("roster_match"), src)).lastrowid
+                 e.get("infraction"), cls, minutes, rule,
+                 int(not assists) if kind == "goal" else None, e.get("roster_match"), e.get("note"), src)).lastrowid
             if kind == "goal":
                 for i, apid in enumerate(assist_ids, start=1):
                     conn.execute("INSERT INTO event_assists (event_id, ordinal, person_id, source) VALUES (?, ?, ?, ?)",
@@ -536,12 +641,14 @@ def import_events(conn, game_id: str, events: list[dict], team_names: dict[str, 
             for extra in e.get("additional") or []:
                 if not extra.get("classification"):
                     raise ValueError(f"event {n}: an additional penalty needs a classification")
+                cls, minutes, rule = penalty_minutes(game["rulebook"], extra["classification"], extra.get("minutes"))
                 order["penalty"] += 1
                 conn.execute(
                     "INSERT INTO events (game_id, team_id, kind, ordinal, parent_event_id, person_id, period, scene, "
-                    "classification, minutes, note, source) VALUES (?, ?, 'penalty', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "classification, minutes, minutes_rule, note, source) "
+                    "VALUES (?, ?, 'penalty', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (game_id, team_id, order["penalty"], eid, pid, e.get("period"), e.get("scene"),
-                     extra["classification"], parse_minutes(extra.get("minutes")), extra.get("note"), src))
+                     cls, minutes, rule, extra.get("note"), src))
     return sum(order.values())
 
 
@@ -597,6 +704,13 @@ def game_flags(conn, game_id: str) -> list[str]:
     for r in conn.execute("SELECT team_id, classification FROM events WHERE game_id = ? AND kind = 'penalty' "
                           "AND minutes IS NULL", (game_id,)):
         flags.append(f"{r['team_id']}: {r['classification'] or 'penalty'} has no minutes; PIM excludes it")
+    book = RULEBOOKS[game["rulebook"]]
+    for r in conn.execute("SELECT team_id, classification, minutes FROM events WHERE game_id = ? AND kind = 'penalty' "
+                          "AND minutes IS NOT NULL AND classification IS NOT NULL", (game_id,)):
+        record, rule = book[r["classification"]]
+        if r["minutes"] != record:
+            flags.append(f"{r['team_id']}: {r['classification']} has {_whole(r['minutes'])} min; "
+                         f"{rule} records {record}")
     return flags
 
 
@@ -632,7 +746,7 @@ def snapshot(conn, game_id: str) -> dict:
 
     for e in conn.execute("SELECT * FROM events WHERE game_id = ? ORDER BY id", (game_id,)):
         out = {k: e[k] for k in ("id", "kind", "ordinal", "parent_event_id", "period", "clock", "scene",
-                                 "infraction", "classification", "minutes", "source")}
+                                 "infraction", "classification", "minutes", "minutes_rule", "note", "source")}
         out["team"] = e["team_id"]
         out["person"] = people[e["person_id"]] if e["person_id"] else None
         if e["kind"] == "goal":
@@ -658,6 +772,7 @@ def snapshot(conn, game_id: str) -> dict:
         tables[tid] = sorted(rows.values(), key=lambda r: (-r["pts"], -r["g"], -r["pim"], first_event[r["id"]]))
     goals = {tid: sum(e["kind"] == "goal" and e["team"] == tid for e in events) for tid in teams}
     return {"schema_version": SNAPSHOT_VERSION, "game": {"id": game_id, "date": game["date"], "season": season,
+            "rulebook": game["rulebook"],
             "focus_team": game["focus_team_id"], "folder": game["folder"]}, "teams": teams, "score": goals,
             "events": events, "stats": tables, "team_pim": {t: _whole(v) for t, v in team_pim.items()},
             "flags": game_flags(conn, game_id)}
@@ -692,6 +807,7 @@ def main(argv=None) -> int:
     e.add_argument("--teams", required=True, help="comma-separated team ids")
     e.add_argument("--focus")
     e.add_argument("--folder")
+    e.add_argument("--rulebook", default="usah", choices=sorted(RULEBOOKS))
     s = sub.add_parser("snapshot")
     s.add_argument("game")
     s.add_argument("--out")
@@ -709,7 +825,7 @@ def main(argv=None) -> int:
         print(f"[team_db] imported {import_team(conn, args.path, args.season)} for {args.season}")
     elif args.cmd == "import-events":
         ids = args.teams.split(",")
-        add_game(conn, args.game, args.date, ids, args.focus, args.folder)
+        add_game(conn, args.game, args.date, ids, args.focus, args.folder, rulebook=args.rulebook)
         by_name = {r["name"]: r["id"] for r in conn.execute(
             f"SELECT id, name FROM teams WHERE id IN ({','.join('?' * len(ids))})", ids)}
         data = json.loads(Path(args.path).read_text())
