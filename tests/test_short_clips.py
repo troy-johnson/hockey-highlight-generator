@@ -371,3 +371,16 @@ def test_fractional_seek_still_fills_every_frame(tmp_path, monkeypatch):
     probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams",
                                                "-of", "json", str(target)]))["streams"][0]
     assert int(probe["nb_frames"]) == 195
+
+
+def test_goal_with_unknown_sheet_clock_is_ordered_by_camera_time():
+    from short_clips import plan_short
+    goals = [{"id": "home:1", "period": None, "elapsed_s": None, "interest": .8,
+              "chosen": {"primary_cam": "cam1", "detection_s": 20.}},
+             {"id": "away:1", "period": 1, "elapsed_s": 50., "interest": .8,
+              "chosen": {"primary_cam": "cam1", "detection_s": 100.}}]
+    selection = {"goals": goals, "plays": [{"id": "p_save", "kind": "save", "primary_cam": "cam1",
+                                            "score": 1., "detection_s": 50.}]}
+    layouts = {"cam1": [{"start": 0., "end": 200., "seek": 0., "files": [("synthetic.mp4", 200.)]}]}
+    scores = {c["goal_id"]: c["score"] for c in plan_short(selection, layouts)["clips"]}
+    assert scores == {"home:1": [1, 0], "p_save": [1, 0], "away:1": [1, 1]}   # was 1-1, 1-1, 0-1

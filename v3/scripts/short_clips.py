@@ -183,17 +183,22 @@ def plan_short(selection: dict, layouts: dict, *, rois=None, sheet=None, bar_s=2
         elif item["kind"] == "penalty":
             clip["caption"] = item.get("caption") or item.get("label") or "PENALTY"
         goals = selection.get("goals") or []
-        ordered = sorted(goals, key=lambda g: (g.get("period") or 999, g.get("elapsed_s", math.inf)
-                         if g.get("elapsed_s") is not None else
-                         (g.get("chosen") or {}).get("detection_s", math.inf),
-                         int(g["id"].split(":")[-1])))
+
+        def expected(goal):
+            return (goal.get("chosen") or {}).get("detection_s", (goal.get("window") or {}).get("expected"))
+        if any(g.get("period") is None or g.get("elapsed_s") is None for g in goals):
+            # An unknown sheet clock cannot be ordered against the others: use camera time,
+            # as recap_graphics does (a goal with no period sorted last counted too early).
+            ordered = sorted(goals, key=lambda g: (expected(g) is None,
+                             expected(g) if expected(g) is not None else math.inf,
+                             int(g["id"].split(":")[-1])))
+        else:
+            ordered = sorted(goals, key=lambda g: (g["period"], g["elapsed_s"], int(g["id"].split(":")[-1])))
         if item["kind"] == "goal":
             prior = ordered[:next((i + 1 for i, g in enumerate(ordered) if g["id"] == item["id"]), 0)]
         else:
-            # Every goal in sheet order up to the last one before this moment, so a goal with
+            # Every goal in game order up to the last one before this moment, so a goal with
             # no source moment still counts once a later goal has (the score never goes down).
-            def expected(goal):
-                return (goal.get("chosen") or {}).get("detection_s", (goal.get("window") or {}).get("expected"))
             prior = ordered[:max((i + 1 for i, g in enumerate(ordered)
                                   if expected(g) is not None and expected(g) <= moment), default=0)]
         for goal in prior:
