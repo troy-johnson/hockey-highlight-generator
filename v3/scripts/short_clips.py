@@ -122,7 +122,8 @@ def measure_motion(entry: dict, cache: Path) -> list[list[float]]:
     return samples
 
 
-def plan_short(selection: dict, layouts: dict, *, rois=None, sheet=None, bar_s=2., focus_side=None, coverage=None) -> dict:
+def plan_short(selection: dict, layouts: dict, *, rois=None, sheet=None, bar_s=2., focus_side=None, coverage=None,
+               audio_signals=None) -> dict:
     """Choose the five highest-interest covered plays, then restore game order."""
     from recap_graphics import goal_data, final_data
     if not math.isfinite(bar_s) or not .5 <= bar_s <= 8:
@@ -277,11 +278,33 @@ def plan_short(selection: dict, layouts: dict, *, rois=None, sheet=None, bar_s=2
     clips.sort(key=lambda c: (c["moment_s"], c["goal_id"]))
     final = dict(final_data(sheet, flags), kind="final", frames=150, teams=sheet.get("teams") or {})
     frames = hook["frames"] + sum(c["frames"] for c in clips + replays) + final["frames"]
-    return {"schema_version": 1, "width": 1080, "height": 1920, "fps": FPS,
+    result = {"schema_version": 1, "width": 1080, "height": 1920, "fps": FPS,
             "opening": [hook], "clips": clips, "replays": replays, "final": final,
             "duration_s": frames / FPS, "single_goals": singles, "flags": flags,
              "bar_frames": bar_frames, "bar_s": bar_s, "bed_offset_s": round((-2) % bar_s, 6),
-            "teams": sheet.get("teams") or {}}
+             "teams": sheet.get("teams") or {}}
+    bind_short_whistles(result, selection, audio_signals or {})
+    return result
+
+
+def bind_short_whistles(plan: dict, selection: dict, signals: dict) -> None:
+    """Use the Recap whistle mapping without changing any Short source cut."""
+    from audio_mix import build_timeline
+    clips = [dict(e, kind="play", play_kind="penalty") if e["kind"] == "penalty" else dict(e)
+             for e in plan["clips"]]
+    timeline = build_timeline({"clips": clips, "replays": plan["replays"]},
+                              selection=selection, audio_signals=signals)
+    confirmed = {e["goal_id"]: e.get("confirmation_out") for e in timeline if e["kind"] in ("goal", "play")}
+    hook_seconds = sum(e["frames"] for e in plan["opening"]) / FPS
+    cursor = 0.
+    for entry in short_sequence(plan):
+        if entry["kind"] == "final":
+            continue
+        when = confirmed.get(entry["goal_id"])
+        entry["confirmation_out"] = None if when is None or entry["kind"] == "hook" else when + hook_seconds - cursor
+        if when is None and entry["kind"] in ("goal", "penalty"):
+            plan["flags"].append(f"{entry['goal_id']}: whistle unavailable; event caption and score change held")
+        cursor += entry["frames"] / FPS
 
 
 def _text(frame, text, x, y, scale=1., color=(245, 245, 245)):
@@ -289,10 +312,17 @@ def _text(frame, text, x, y, scale=1., color=(245, 245, 245)):
     cv2.putText(frame, str(text), (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2, cv2.LINE_AA)
 
 
+def _fit_text(frame, text, x, y, width, scale=1.):
+    import cv2
+    measured = cv2.getTextSize(str(text), cv2.FONT_HERSHEY_SIMPLEX, scale, 2)[0][0]
+    _text(frame, text, x, y, min(scale, scale * width / max(1, measured)))
+
+
 def score_at(entry: dict, elapsed_s: float) -> list[int]:
-    """Change the live score at the source goal moment, never during a replay."""
-    if entry["kind"] in ("goal", "hook") and entry.get("score_before") is not None:
-        if entry["start_s"] + elapsed_s * entry["speed"] < entry["moment_s"]:
+    """Keep the pre-goal score until the first output frame at the bound whistle."""
+    if entry["kind"] in ("goal", "hook", "replay") and entry.get("score_before") is not None:
+        when = entry.get("confirmation_out")
+        if when is None or round(elapsed_s * FPS) < math.ceil(when * FPS - 1e-8):
             return entry["score_before"]
     return entry.get("score", [0, 0])
 
@@ -317,7 +347,7 @@ def _overlay(frame, entry, plan, elapsed_s=0.):
         table = entry.get("table") or {}
         for column, side in enumerate(("home", "away")):
             x, y = 30 + column * 540, 440
-            _text(frame, teams.get(side, side.upper())[:22], x, y, .9)
+            _fit_text(frame, teams.get(side, side.upper()), x, y, 500, .9)
             y += 55
             _text(frame, "PLAYER", x, y, .7)
             y += 45
@@ -326,7 +356,7 @@ def _overlay(frame, entry, plan, elapsed_s=0.):
             step = min(65, 1250 / max(1, len(rows) + len(data.get("goalies", []))))
             scale = min(.6, step / 100)
             for row in rows:
-                _text(frame, f"#{row.get('num', '')} {row.get('name', '')}"[:25], x, round(y), scale)
+                _fit_text(frame, f"#{row.get('num', '')} {row.get('name', '')}", x, round(y), 500, scale)
                 values = [str(row[k]) if row.get(k) is not None else "?" for k in ("g", "a", "pts", "pim")]
                 _text(frame, "G/A/PTS/PIM " + "/".join(values), x, round(y + step*.4), scale*.8)
                 y += step
@@ -334,9 +364,12 @@ def _overlay(frame, entry, plan, elapsed_s=0.):
                 _text(frame, f"#{goalie['num']} SAVES {goalie['saves']}", x, round(y), scale)
                 y += step
         return
-    if entry.get("caption"):
+    event_caption = entry["kind"] in ("goal", "penalty", "hook", "replay")
+    when = entry.get("confirmation_out")
+    accepted = when is not None and round(elapsed_s * FPS) >= math.ceil(when * FPS - 1e-8)
+    if entry.get("caption") and (not event_caption or accepted):
         cv2.rectangle(frame, (0, 1750), (1080, 1920), (25, 25, 32), -1)
-        _text(frame, entry["caption"][:48], 40, 1840, 1.)
+        _fit_text(frame, entry["caption"], 40, 1840, 1000, 1.)
     if entry["kind"] == "replay":
         _text(frame, "REPLAY", 790, 230, .8)
 
@@ -579,12 +612,14 @@ def main(argv=None) -> int:
         from audio_mix import resolve_focus_side
         focus_name = options.get("focus_team")
         focus_name = ((options.get("teams") or {}).get(focus_name) or {}).get("name", focus_name)
-        focus_side, focus_flag = resolve_focus_side("focus", focus_name, sheet)
+        focus_side, focus_flag = resolve_focus_side(options.get("perspective", "neutral"), focus_name, sheet)
         if focus_flag:
             flags.append(focus_flag)
         structure = json.loads((root / "coverage.json").read_text()) if (root / "coverage.json").exists() else {}
+        selection = dict(selection, periods=structure.get("periods") or [])
+        signals = json.loads((root / "audio_signals.json").read_text()) if (root / "audio_signals.json").exists() else {}
         plan = plan_short(selection, layouts, rois=load_rois(root), sheet=sheet,
-                          bar_s=bar_seconds(bed), focus_side=focus_side, coverage=structure.get("coverage"))
+                          bar_s=bar_seconds(bed), focus_side=focus_side, coverage=structure.get("coverage"), audio_signals=signals)
         plan["flags"].extend(flags)
         for entry in plan["opening"] + plan["clips"] + plan["replays"]:
             if entry["kind"] == "replay":

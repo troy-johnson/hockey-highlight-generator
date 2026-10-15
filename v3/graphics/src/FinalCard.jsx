@@ -17,35 +17,6 @@ const fit = fitText;
 const Crest = ({team, size}) => team.logo ? <Img src={staticFile(team.logo)}
   style={{width: size, height: size, objectFit: 'contain', flexShrink: 0}}/> : null;
 
-const Plate = ({data, teams, vertical, accent}) => {
-  const [home, away] = data.score;
-  const tone = i => home === away || data.score[i] === Math.max(home, away) ? ice : '#66737E';
-  const side = (key, i) => <div style={{flex: 1, minWidth: 0, height: '100%', display: 'flex',
-    alignItems: 'center', gap: vertical ? 14 : 22, padding: vertical ? '0 18px' : '0 28px',
-    flexDirection: i === 1 ? 'row-reverse' : 'row', boxSizing: 'border-box',
-    borderBottom: `4px solid ${teams[key].line ?? teams[key].primary}`, background: '#19212A'}}>
-    <Crest team={teams[key]} size={vertical ? 64 : 88}/>
-    <span style={{fontWeight: 800, letterSpacing: .5, whiteSpace: 'nowrap',
-      fontSize: fit(vertical ? teams[key].acronym : teams[key].name, vertical ? 34 : 40, vertical ? 200 : 300),
-      textAlign: i === 1 ? 'right' : 'left'}}>
-      {vertical ? teams[key].acronym : teams[key].name}</span>
-  </div>;
-  const score = i => <div style={{width: vertical ? 104 : 136, height: '100%', display: 'flex',
-    alignItems: 'center', justifyContent: 'center', background: '#232B34', color: tone(i),
-    fontSize: vertical ? 70 : 88, fontWeight: 800, fontVariantNumeric: 'tabular-nums'}}>
-    {data.score[i]}</div>;
-  return <div style={{display: 'flex', height: vertical ? 112 : 132, width: vertical ? 960 : 1240,
-    background: 'linear-gradient(#19212A, #0E1319)', borderTop: '1px solid rgba(238,243,246,.32)',
-    boxShadow: '0 18px 40px rgba(0,0,0,.5)'}}>
-    {side('home', 0)}{score(0)}
-    <div style={{width: vertical ? 132 : 180, display: 'flex', alignItems: 'center',
-      justifyContent: 'center', background: '#0E1319', borderBottom: `2px solid ${accent}`,
-      boxSizing: 'border-box', fontSize: vertical ? 26 : 30, fontWeight: 750, letterSpacing: 4,
-      color: ice}}>FINAL</div>
-    {score(1)}{side('away', 1)}
-  </div>;
-};
-
 const Table = ({team, table, width, maxRows, start}) => {
   const f = useCurrentFrame();
   // Zero PIM is a recorded value. Both teams use the approved common grid.
@@ -148,7 +119,6 @@ export const FinalCard = ({data, teams, tokens, duration, vertical}) => {
     {...data.table?.[s], skaters: (data.table?.[s]?.skaters || []).slice(page * 10, (page + 1) * 10)}]))};
   const accent = tokens?.accent ?? cyan;
   const W = vertical ? 1080 : 1920;
-  const H = vertical ? 1920 : 1080;
   const recorded = s => (data.table?.[s]?.skaters || []).length > 0;
   // When one team has stats, both teams keep a place; an empty side shows a faded shim.
   const sides = ['home', 'away'].some(recorded) ? ['home', 'away'] : [];
@@ -156,7 +126,6 @@ export const FinalCard = ({data, teams, tokens, duration, vertical}) => {
   const goalies = ['home', 'away'].flatMap(s => (data.table?.[s]?.goalies || [])
     .map(p => ({team: teams[s], p})));
   const any = sides.length || goalies.length;
-  const enter = out(clamp(f / 14));
   const lift = any ? inOut(clamp((f - 30) / 16)) : 0;
   const leave = 1 - inOut(clamp((f - (duration - 10)) / 10));
   const tableTop = vertical ? 570 : 360;

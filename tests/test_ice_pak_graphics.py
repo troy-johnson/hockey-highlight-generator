@@ -1,6 +1,7 @@
 """Approved regional graphics: source timing, frozen data, and game sound."""
-import copy
 import json
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -69,6 +70,7 @@ def test_no_whistle_does_not_create_announcements(tmp_path):
 def test_whistle_just_past_live_cut_keeps_old_score_until_next_frame(tmp_path):
     sheet, selection, plan, audio = game()
     plan["clips"][0]["moment_s"] = 17
+    plan["replays"][0].update(start_s=20, end_s=30)
     selection["goals"][0]["chosen"] = {"candidate_id": "whistle:0"}
     signals = {"whistles": [{"t": 20.02}]}
     timeline = am.build_timeline(plan, selection=selection, audio_signals=signals)
@@ -115,3 +117,74 @@ def test_normalize_game_sound_targets_minus_twenty_lufs(monkeypatch, tmp_path):
     buf = np.zeros((480, 2), dtype=np.float32)
     assert am.normalize_game_sound(buf) is buf
     assert calls == [{"raw_input": True, "tp": -2.0, "target_i": -20.0}]
+
+
+def test_white_score_flash_uses_dark_ink():
+    module = Path(rg.__file__).parents[1] / "graphics/src/score_flash.mjs"
+    result = subprocess.run(["node", "--input-type=module", "-e", f"""
+      import {{scoreFlash}} from {json.dumps(module.as_uri())};
+      console.log(JSON.stringify([scoreFlash('#FFFFFF', 1), scoreFlash('#FFFFFF', 0)]));
+    """], capture_output=True, text=True, check=True)
+    white, graphite = json.loads(result.stdout)
+    assert white == {"background": "rgb(255,255,255)", "color": "#0E1319"}
+    assert graphite["color"] == "#EEF3F6"
+
+
+def test_final_sound_continues_last_source_and_fades(monkeypatch):
+    seen = []
+    def sound(entry, windows):
+        seen.append((entry, windows))
+        return np.ones((am.SR * 5, 2), dtype=np.float32)
+    monkeypatch.setattr(am, "game_sound_entry", sound)
+    previous = {"start_s": 10, "kind": "play", "camera": "cam1", "speed": 1.1,
+                "parts": [{"file": "game.mp4", "seek_s": 100, "duration_s": 4}]}
+    buf = am.closing_game_sound({"out_dur": 5}, previous, [])
+    assert seen[0][0]["parts"][0]["seek_s"] == 104
+    assert seen[0][0]["parts"][0]["duration_s"] == 5.5
+    assert buf[am.SR, 0] == 1
+    assert buf[-1, 0] == 0
+
+
+def test_presentation_onset_waits_for_whistle_in_kept_camera_audio():
+    from whistle_presentation import whistle_onset
+    from scipy.signal import butter, sosfilt
+    rng = np.random.default_rng(42)
+    sr = am.SR
+    mono = rng.normal(0, .0001, sr * 3)
+    start, end = round(1.3 * sr), round(1.8 * sr)
+    tone = sosfilt(butter(10, [2100, 2350], fs=sr, btype="bandpass", output="sos"),
+                   rng.normal(0, 2, end - start))
+    mono[start:end] += tone
+    onset = whistle_onset(np.column_stack([mono, mono]), sr, 1.0, 3.0)
+    assert 1.3 <= onset < 1.5
+
+
+def test_presentation_does_not_invent_a_whistle_from_silence():
+    from whistle_presentation import whistle_onset
+    assert whistle_onset(np.zeros((am.SR * 2, 2)), am.SR, 1, 2) is None
+
+
+def test_graphics_use_kept_audio_onset_proof_not_merged_camera_start(tmp_path):
+    from whistle_presentation import METHOD
+    sheet, selection, plan, audio, signals = inputs()
+    for cue in audio["cues"]:
+        if cue["cue"] == "sfx_goal_card" and cue["goal_id"] == "home:1":
+            cue["t"] += .3
+    audio["presentation_whistles"] = [{"goal_id": "home:1", "mapped_t": 7.011,
+        "onset_t": 7.311, "method": METHOD}]
+    # Other event cues have no acoustic proof and must not be accepted.
+    audio["cues"] = [c for c in audio["cues"] if not c["cue"].startswith("sfx_") or c.get("goal_id") == "home:1"]
+    props = rg.write_props(tmp_path, sheet, selection, plan, audio, {}, audio_signals=signals)
+    bug = next(e for e in props["events"] if e["kind"] == "scorebug" and e["data"]["score"] == [1, 0])
+    assert bug["startFrame"] == 220
+
+
+@pytest.mark.parametrize("record", [
+    {"goal_id": "home:1", "mapped_t": 7, "onset_t": 7.3, "method": "unknown"},
+    {"goal_id": "home:1", "mapped_t": 6, "onset_t": 7.3, "method": "kept-audio-whistle-v1"},
+    {"goal_id": "home:1", "mapped_t": 7, "onset_t": 6.9, "method": "kept-audio-whistle-v1"},
+])
+def test_stale_or_early_acoustic_proof_is_rejected(record):
+    from whistle_presentation import verified_onset
+    with pytest.raises(ValueError, match="rerun mix"):
+        verified_onset({"presentation_whistles": [record]}, "home:1", 7)

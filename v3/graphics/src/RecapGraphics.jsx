@@ -1,5 +1,5 @@
-import React from 'react';
-import {AbsoluteFill, Sequence, staticFile, useCurrentFrame} from 'remotion';
+import React, {useEffect, useState} from 'react';
+import {AbsoluteFill, cancelRender, continueRender, delayRender, Sequence, staticFile, useCurrentFrame} from 'remotion';
 import {OpeningRail, Stinger} from './Stingers';
 import {FrostPane, PeriodRail} from './FrostPane';
 import {FinalCard} from './FinalCard';
@@ -8,9 +8,7 @@ import {RegionalCard, StackedBug} from './IcePakGraphics';
 const Event = ({event, props}) => {
   const absoluteFrame = event.startFrame + useCurrentFrame();
   const vertical = props.height > props.width;
-  const score = props.events.find(e => e.kind === 'scorebug' && e.startFrame <= absoluteFrame &&
-    absoluteFrame < e.startFrame + e.durationFrames)?.data.score;
-  const common = {data: {...event.data, score: event.data.score ?? score}, teams: props.teams,
+  const common = {data: {...event.data, score: event.data.score ?? event.presentation?.score}, teams: props.teams,
     tokens: props.tokens, duration: event.durationFrames, vertical};
   if (props.designPreview && event.data.status === 'design_sample') {
     common.teams = Object.fromEntries(['home', 'away'].map(side => [side, {
@@ -37,7 +35,16 @@ const Event = ({event, props}) => {
   throw new Error(`Unknown graphics event ${event.kind}`);
 };
 
-export const RecapGraphics = props => <AbsoluteFill style={{fontFamily: 'Inter, Arial, sans-serif',
+export const RecapGraphics = props => {
+  const [ready, setReady] = useState(false);
+  const [handle] = useState(() => delayRender('Load graphics Inter font'));
+  useEffect(() => {
+    let live = true;
+    document.fonts.load('850 32px Inter').then(() => {if (live) setReady(true);}).catch(cancelRender);
+    return () => {live = false;};
+  }, []);
+  useEffect(() => {if (ready) continueRender(handle);}, [ready, handle]);
+  return <AbsoluteFill style={{fontFamily: 'Inter, Arial, sans-serif',
   fontVariantNumeric: 'tabular-nums', color: '#EEF3F6'}}>
   <style>{`@font-face {font-family: Inter; src: url('${staticFile('Inter.ttf')}'); font-weight: 100 900;}
     @font-face {font-family: Inter; src: url('${staticFile('Inter-Italic.ttf')}'); font-weight: 100 900; font-style: italic;}`}</style>
@@ -49,3 +56,4 @@ export const RecapGraphics = props => <AbsoluteFill style={{fontFamily: 'Inter, 
       layout="none"><Event event={event} props={props}/></Sequence>)}
   </div>
 </AbsoluteFill>;
+};

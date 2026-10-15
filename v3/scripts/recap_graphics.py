@@ -277,8 +277,13 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
             source = next((e for e in timeline if e.get("goal_id") == cue.get("goal_id") and
                            e["kind"] in ("goal", "play")), None)
             confirmation = source.get("confirmation_out") if source else None
+            from whistle_presentation import verified_onset
+            confirmation = verified_onset(audio, cue.get("goal_id"), confirmation)
             if confirmation is None or cue["t"] + 1e-8 < confirmation:
                 raise ValueError(f'{cue.get("goal_id")}: mix cue precedes a verified whistle; rerun mix')
+            if cue["t"] > confirmation + 1e-8:
+                flags.append(f'{cue.get("goal_id")}: late mix cue; graphics use the whistle, rerun mix for sound alignment')
+            cue["t"] = confirmation
     frame_cursor = 0
     for entry in timeline:
         entry["frame_start"] = frame_cursor
@@ -323,7 +328,7 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
                 last_score[:] = score
                 events.append({"kind": "scorebug", "startFrame": a, "durationFrames": b - a,
                                "data": {"score": score, "period": period}})
-        if e["kind"] == "goal":
+        if gid in goal_order:
             confirmation = next((c["t"] for c in audio.get("cues", [])
                                  if c["cue"] == "sfx_goal_card" and c.get("goal_id") == gid), None)
             # A kept goal waits for its whistle. Unknown timing cannot announce a score.
@@ -334,19 +339,11 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
             bug(start, change, score_before(gid))
             bug(change, end, score_before(gid, True))
         else:
-            if gid in goal_order:
-                confirmation = next((c["t"] for c in audio.get("cues", [])
-                                     if c["cue"] == "sfx_goal_card" and c.get("goal_id") == gid), None)
-                change = end if confirmation is None else max(start, min(end, math.ceil(confirmation * fps - 1e-8)))
-                bug(start, change, score_before(gid))
-                bug(change, end, score_before(gid, True))
-            else:
-                score = [sum(g.startswith(s + ":") and moments.get(g) is not None
-                               and moments[g] <= moment for g in goal_order) for s in ("home", "away")]
-                bug(start, end, score)
-            # A replay shot (a goal's, or the best non-goal play's) carries its shot kind, not "play".
-            if e["kind"] != "play":
-                events.append({"kind": "replay", "startFrame": start, "durationFrames": end - start, "data": {}})
+            score = [sum(g.startswith(s + ":") and moments.get(g) is not None
+                           and moments[g] <= moment for g in goal_order) for s in ("home", "away")]
+            bug(start, end, score)
+        if e["kind"] not in ("goal", "play"):
+            events.append({"kind": "replay", "startFrame": start, "durationFrames": end - start, "data": {}})
     for cue in audio.get("cues") or []:
         if not cue["cue"].startswith("sfx_"):
             continue
@@ -508,6 +505,23 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
             props["flags"].append(f"{goal['id']}: goal timing unavailable; scorebug needs review")
         elif goal in uncertain_clocks:
             props["flags"].append(f"{goal['id']}: sheet clock unavailable; score order uses camera timing")
+    bugs = sorted((e for e in props["events"] if e["kind"] == "scorebug"), key=lambda e: e["startFrame"])
+    previous = None
+    for event in bugs:
+        adjacent = previous is not None and previous["startFrame"] + previous["durationFrames"] == event["startFrame"]
+        animation = {"initiallyVisible": adjacent or event["data"].get("initiallyVisible", False)}
+        for key, title in (("score", "Score"), ("period", "Period")):
+            same = adjacent and previous["data"][key] == event["data"][key]
+            animation[key + "Frame"] = previous["animation"][key + "Frame"] if same else event["startFrame"]
+            animation["previous" + title] = (previous["animation"]["previous" + title] if same else
+                                             previous["data"][key] if adjacent else None)
+        event["animation"] = animation
+        previous = event
+    for event in props["events"]:
+        if event["kind"] in ("goal", "penalty", "call"):
+            current = next((e for e in bugs if e["startFrame"] <= event["startFrame"] <
+                            e["startFrame"] + e["durationFrames"]), None)
+            event["presentation"] = {"score": current["data"]["score"] if current else last_score[:]}
     table = final_data(sheet, [])["table"]
     for event in props["events"]:
         if event["kind"] == "final":

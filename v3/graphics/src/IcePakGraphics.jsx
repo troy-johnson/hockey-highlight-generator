@@ -1,5 +1,6 @@
 import React from 'react';
-import {AbsoluteFill, Easing, Img, staticFile, useCurrentFrame} from 'remotion';
+import {Easing, Img, staticFile, useCurrentFrame} from 'remotion';
+import {scoreFlash} from './score_flash.mjs';
 
 // Shared plates and motion from the approved v21 regional package.
 export const plate = '#0E1319';
@@ -16,29 +17,32 @@ export const periodLabel = n => String(n).toUpperCase() === 'SO' ? 'SO' : ({1: '
 export const dateLabel = date => /^\d{4}-\d{2}-\d{2}$/.test(date || '') ?
   new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC'}).toUpperCase() : date;
 
-// Inter's widest glyph is bounded by 1.1 em. Preserve the full text, including surnames.
-export const fit = (text, base, width, spacing = 0) => Math.min(base,
-  Math.max(1, width - Math.max(0, String(text ?? '').length - 1) * spacing) /
-  Math.max(1, [...String(text ?? '')].reduce((sum, c) => sum + (/[MW@%]/.test(c) ? 1.1 : /[ilI1 .,:'!]/.test(c) ? .35 : .72), 0)));
+let textContext;
+// Measure the loaded Inter font. Preserve the complete text, including surnames.
+export const fit = (text, base, width, spacing = 0) => {
+  const value = String(text ?? '');
+  if (typeof document !== 'undefined' && document.fonts.check('850 32px Inter')) {
+    textContext ??= document.createElement('canvas').getContext('2d');
+    textContext.font = `850 ${base}px Inter`;
+    const available = Math.max(1, width - Math.max(0, [...value].length - 1) * spacing);
+    return Math.min(base, base * available / Math.max(1, textContext.measureText(value).width));
+  }
+  return Math.min(base, width / Math.max(1, [...value].length * 1.1));
+};
 export const Crest = ({team, size}) => team?.logo ? <Img src={staticFile(team.logo)}
   style={{width: size, height: size, objectFit: 'contain', flexShrink: 0}}/> :
   <span style={{width: size, flexShrink: 0, textAlign: 'center', fontSize: fit(team?.acronym, 18, size)}}>{team?.acronym}</span>;
 export const Accent = ({color, p, h = 4}) => <div style={{position: 'absolute', left: `${(1 - p) * 50}%`, bottom: 0,
   height: h, width: `${p * 100}%`, background: color}}/>;
 
-const mix = (hex, base, k) => {
-  const a = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
-  const b = [1, 3, 5].map(i => parseInt(base.slice(i, i + 2), 16));
-  return `rgb(${a.map((v, i) => Math.round(v * k + b[i] * (1 - k))).join(',')})`;
-};
 const TEAM = 170, SCORE = 54, PERIOD = 78, WIDTH = TEAM + SCORE + PERIOD;
 const ScoreCell = ({team, value, previous, local}) => {
   const changed = previous !== undefined && local >= 0 && local < 30 && previous !== value;
   const roll = changed ? io(clamp(local / 10)) : 1;
   const flash = changed ? (local < 18 ? 1 : io(clamp((30 - local) / 12))) : 0;
   const color = value < previous ? ink : team.primary;
-  return <div style={{width: SCORE, height: 44, overflow: 'hidden', position: 'relative', color: ink,
-    fontSize: 28, fontWeight: 800, background: flash > 0 ? mix(color, grey, flash) : grey}}>
+  return <div style={{width: SCORE, height: 44, overflow: 'hidden', position: 'relative',
+    fontSize: 28, fontWeight: 800, ...scoreFlash(color, flash)}}>
     <div style={{transform: changed ? `translateY(${-roll * 44}px)` : undefined}}>
       {(changed ? [previous, value] : [value]).map((v, i) => <div key={i} style={{height: 44, display: 'flex',
         alignItems: 'center', justifyContent: 'center'}}>{v}</div>)}</div></div>;
@@ -68,19 +72,10 @@ export const EventBar = ({team, text, frame, duration = 70}) => {
 };
 
 export const StackedBug = ({event, props, absoluteFrame, vertical}) => {
-  const bugs = props.events.filter(e => e.kind === 'scorebug' && e.startFrame <= absoluteFrame)
-    .sort((a, b) => a.startFrame - b.startFrame);
-  const index = bugs.indexOf(event);
-  // Keep a roll's origin across adjacent clips. A cut must not restart or cancel it.
-  const change = key => {
-    let i = index;
-    const equal = (a, b) => JSON.stringify(a.data[key]) === JSON.stringify(b.data[key]);
-    while (i > 0 && equal(bugs[i], bugs[i - 1]) &&
-      bugs[i - 1].startFrame + bugs[i - 1].durationFrames === bugs[i].startFrame) i--;
-    return {local: absoluteFrame - bugs[i].startFrame, previous: i > 0 ? bugs[i - 1].data[key] : undefined};
-  };
-  const score = change('score'), period = change('period');
-  const k = event.data.initiallyVisible || index > 0 ? 1 : enter(absoluteFrame, event.startFrame, 12);
+  const motion = event.animation || {};
+  const score = {local: absoluteFrame - (motion.scoreFrame ?? event.startFrame), previous: motion.previousScore};
+  const period = {local: absoluteFrame - (motion.periodFrame ?? event.startFrame), previous: motion.previousPeriod};
+  const k = motion.initiallyVisible || event.data.initiallyVisible ? 1 : enter(absoluteFrame, event.startFrame, 12);
   const bar = props.events.find(e => e.kind === 'event_bar' && e.startFrame <= absoluteFrame && absoluteFrame < e.startFrame + e.durationFrames);
   const replay = props.events.find(e => e.kind === 'replay' && e.startFrame <= absoluteFrame && absoluteFrame < e.startFrame + e.durationFrames);
   const row = (side, i) => <div style={{display: 'flex', height: 44}}>

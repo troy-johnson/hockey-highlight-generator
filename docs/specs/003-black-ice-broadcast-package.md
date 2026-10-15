@@ -27,9 +27,13 @@ Missing coverage stops graphics. A new snapshot or coverage file invalidates the
 
 The user decided on 2026-10-15 that **score changes, event bars, and event cards must all wait for the referee whistle**.
 Bind the whistle to the kept event. Map its source time through the existing cut and speed.
+If only a retained Replay contains the whistle, use that Replay's seek and speed for the handoff.
 Use the first output frame at or after the whistle, never the nearest frame before it.
 The flow moment has 12 Hz precision; a bound whistle may precede that estimate by one analysis sample.
 Never use that tolerance to move the announcement before the actual whistle.
+The mix checks the bound whistle in kept-camera audio. It records an onset proof in `recap_audio.json`.
+This presentation check does not change Detection, Selection, or cuts. Missing acoustic confirmation omits the announcement.
+Graphics rejects an onset proof that no longer matches the source whistle.
 
 The event bar enters at the whistle frame. The matching card starts its entry six frames later.
 Keep score and period animation origins across adjacent clips, including a live-to-Replay handoff.
@@ -44,6 +48,7 @@ The asset remains outside the repository. Configuration supplies its path; packa
 With a pre-rendered opening, the normal mix defaults to `audio.mode: game_sound`.
 Use the same source seeks and speed as the approved footage. Lower Replay sound by 8 dB and fade cut edges over 15 ms.
 Normalize rink sound to -20 LUFS before adding the mastered opening sound. Apply the output peak limiter.
+Continue the last play's sound under FINAL and fade it over the final three seconds.
 Do not add a synthetic Bed, horn, or graphic cue in game-sound mode. PA music muting still applies.
 Keep `audio.mode: broadcast` available for the existing Cue Library mix and both Perspectives.
 Detection audio weighting remains zero. Graphics sound does not change Detection.
