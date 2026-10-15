@@ -26,31 +26,57 @@ def output_seconds(plan, kind=None):
     return sum(r["frames"] for r in replays(plan, kind)) / A.FPS
 
 
-def test_tier_1_gets_wide_and_tight_replays():
+def test_tier_1_gets_one_tight_replay():
     plan = A.plan_recap(*fixture(1))
-    assert [r["kind"] for r in plan["replays"]] == ["wide", "tight"]
-    assert output_seconds(plan) == pytest.approx(8.0, abs=.1)  # 2 shots, ~8 s
+    assert [r["kind"] for r in plan["replays"]] == ["tight"]
+    assert output_seconds(plan) == pytest.approx(8.0, abs=.1)
     assert all(r["camera"] == "cam2" and r["speed"] == A.SLOW_MO for r in plan["replays"])
+
+
+def test_goal_replay_keeps_shot_setup_and_surrounding_players():
+    plan = A.plan_recap(*fixture(1), rois={"cam2": {"net": [600, 340, 150, 90]}})
+    shot = plan["replays"][0]
+    assert shot["start_s"] <= 28.5
+    assert shot["end_s"] >= 32.1
+    assert shot["zoom"]["wf"] >= 2 / 3
+
+
+def test_saved_play_review_rejects_false_penalty_without_changing_selection(tmp_path):
+    selection, layouts = fixture(1)
+    selection["plays"] = [{"id": "penalty:away:3", "kind": "penalty", "chosen": True,
+                           "primary_cam": "cam2", "detection_s": 50., "start_s": 46.,
+                           "end_s": 54., "score": .9, "candidate_id": "whistle:7"}]
+    (tmp_path / "play_review.json").write_text(json.dumps({"schema_version": 1, "plays": {
+        "penalty:away:3": {"status": "reject", "reason": "icing, not a penalty",
+                           "source": {"candidate_id": "whistle:7", "detection_s": 50.,
+                                      "primary_cam": "cam2", "start_s": 46., "end_s": 54.}}}}))
+    reviewed = A.load_play_reviews(tmp_path, selection)
+    plan = A.plan_recap(reviewed, layouts)
+    assert not any(c["goal_id"] == "penalty:away:3" for c in plan["clips"] + plan["replays"])
+    assert "review_status" not in selection["plays"][0]
+    selection["plays"][0]["detection_s"] = 51.
+    with pytest.raises(ValueError, match="stale play review"):
+        A.load_play_reviews(tmp_path, selection)
 
 
 def test_tier_2_gets_one_long_tight_shot():
     plan = A.plan_recap(*fixture(7))
     assert [r["kind"] for r in plan["replays"]] == ["tight"] * 7
-    assert output_seconds(plan, "tight") / 7 == pytest.approx(5.0, abs=.1)
+    assert output_seconds(plan, "tight") / 7 == pytest.approx(8.0, abs=.1)
     assert not replays(plan, "wide")
 
 
 def test_tier_3_gets_one_short_tight_shot():
     plan = A.plan_recap(*fixture(13))
     assert len(replays(plan, "tight")) == 13
-    assert output_seconds(plan, "tight") / 13 == pytest.approx(4.0, abs=.1)
+    assert output_seconds(plan, "tight") / 13 == pytest.approx(8.0, abs=.1)
     assert not replays(plan, "wide")
 
 
 def test_replays_follow_their_goal_in_sequence_order():
     plan = A.plan_recap(*fixture(2))
     order = [(r["goal_id"], r["kind"]) for r in plan["replays"]]
-    assert order == [("home:0", "wide"), ("home:0", "tight"), ("home:1", "wide"), ("home:1", "tight")]
+    assert order == [("home:0", "tight"), ("home:1", "tight")]
     assert all(r["order"] == int(r["goal_id"].split(":")[1]) for r in plan["replays"])
 
 
@@ -59,10 +85,10 @@ def test_replay_window_lies_inside_recording_coverage():
     for r in plan["replays"]:
         assert r["start_s"] >= 0 and r["end_s"] <= 100000
         assert r["start_s"] < 30 + A.REPLAY_WINDOW_BIAS < r["end_s"]
-    # Whistle detection leads the crossing: the window centers on detection + bias.
+    # The replay includes setup before the detected goal moment.
     r = plan["replays"][0]
-    assert r["start_s"] == pytest.approx(30 + A.REPLAY_WINDOW_BIAS - 1.0)
-    assert r["end_s"] == pytest.approx(30 + A.REPLAY_WINDOW_BIAS + 1.0)
+    assert r["start_s"] == pytest.approx(28.25)
+    assert r["end_s"] == pytest.approx(32.25)
 
 
 def test_replay_shot_without_room_is_omitted_not_fatal():
@@ -71,14 +97,28 @@ def test_replay_shot_without_room_is_omitted_not_fatal():
     plan = A.plan_recap(selection, layouts)
     assert len(plan["clips"]) == 1  # the live clip still fits
     assert not plan["replays"]
-    assert any("replay wide shot has no room" in f for f in plan["flags"])
     assert any("replay tight shot has no room" in f for f in plan["flags"])
 
 
-def test_live_clip_gets_slow_push_in_and_wide_stays_wide():
+def test_live_clip_gets_slow_push_in_without_a_second_wide_replay():
     plan = A.plan_recap(*fixture(1))
     assert plan["clips"][0]["zoom"] == {"type": "push", "z0": A.ZOOM_MIN, "z1": A.ZOOM_MAX}
-    assert replays(plan, "wide")[0]["zoom"] == {"type": "static", "z": A.ZOOM_MIN}
+    assert not replays(plan, "wide")
+
+
+def test_replay_frames_attackers_above_the_net_with_wider_context():
+    rois = {"cam2": {"net": [520, 320, 240, 200]}}
+    plan = A.plan_recap(*fixture(1), rois=rois)
+    zoom = replays(plan, "tight")[0]["zoom"]
+    keep = 1 - 2 * A.FISHEYE_CROP
+    assert zoom["wf"] >= .8
+    assert zoom["hf"] == zoom["wf"]
+    assert zoom["cy"] == pytest.approx((320 / 720 - A.FISHEYE_CROP) / keep)
+    # The attacking player near the upper edge remains inside the crop.
+    attacker_y = (100 / 720 - A.FISHEYE_CROP) / keep
+    assert zoom["cy"] - zoom["hf"] / 2 <= attacker_y
+    assert plan["replays"][0]["start_s"] == pytest.approx(28.25)
+    assert plan["replays"][0]["end_s"] == pytest.approx(32.25)
 
 
 def test_tight_replay_punches_in_on_the_goal_frame_box():
@@ -91,11 +131,11 @@ def test_tight_replay_punches_in_on_the_goal_frame_box():
     raw = min(1.0, max(1.5 * 200 / 1280, 1.5 * 100 / 720)) / keep
     assert zoom["wf"] == pytest.approx(max(raw, 1 / A.ZOOM_TIGHT_MAX))
     assert zoom["cx"] == pytest.approx(((640 + 100) / 1280 - A.FISHEYE_CROP) / keep)
-    assert zoom["cy"] == pytest.approx(((360 + 50) / 720 - A.FISHEYE_CROP) / keep)
+    assert zoom["cy"] == pytest.approx((360 / 720 - A.FISHEYE_CROP) / keep)
 
 
 def test_tight_replay_zoom_is_clamped_to_zoom_tight_max():
-    # A tiny box (150 px wide) would ask for a ~5x punch-in; the clamp holds 2.5x.
+    # A tiny goal box must not remove the surrounding players.
     rois = {"cam2": {"net": [600, 340, 150, 90]}}
     plan = A.plan_recap(*fixture(1), rois=rois)
     zoom = replays(plan, "tight")[0]["zoom"]
@@ -229,7 +269,7 @@ def test_real_render_sequence_with_slow_motion_and_framing(tmp_path):
     plan = A.plan_recap(selection, layouts, rois={"cam1": {"net": [640, 360, 200, 100]}},
                         source_fps={"cam1": 120.0}, horizon={"cam1": 0.0})
     assert ["live" if e.get("kind") == "goal" else e["kind"] for e in _sequence(plan)] == \
-        ["live", "wide", "tight"]
+        ["live", "tight"]
     output = tmp_path / "Recap.mp4"
     A.render(plan, output)
     probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_format",
@@ -238,8 +278,8 @@ def test_real_render_sequence_with_slow_motion_and_framing(tmp_path):
     assert stream["width"] == 1920 and stream["height"] == 1080
     assert int(stream["nb_frames"]) == sum(e["frames"] for e in _sequence(plan))
     assert abs(float(probe["format"]["duration"]) - plan["duration_s"]) <= .1
-    # slow motion: the replay shots stretch 2 s of source to 4 s at 30 fps
-    assert all(r["frames"] == 120 for r in plan["replays"])
+    # Recording coverage trims this replay to three seconds, or six at half-speed.
+    assert all(r["frames"] == 180 for r in plan["replays"])
 
 
 def _sequence(plan):
@@ -386,7 +426,7 @@ def test_verify_sources_keeps_replays_only_for_kept_goals(tmp_path):
     layouts = {"cam1": [{"start": 0, "end": 3, "seek": 0, "files": [(str(source), 3)]}]}
     plan = A.plan_recap(selection, layouts)
     A.verify_sources(plan)
-    assert len(plan["clips"]) == 1 and len(plan["replays"]) == 2
+    assert len(plan["clips"]) == 1 and len(plan["replays"]) == 1
     assert plan["duration_s"] == pytest.approx(
         sum(e["frames"] for e in plan["clips"] + plan["replays"]) / A.FPS)
 
@@ -420,7 +460,7 @@ def test_cli_main_probes_and_renders(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "render", fake_render)
     assert A.main([str(tmp_path)]) == 0
     assert report["schema_version"] == 3
-    assert len(report["replays"]) == 2
+    assert len(report["replays"]) == 1
     assert all(r["slowmo"] == "duplicated" for r in report["replays"])  # 30 fps source, no RIFE
     assert any("RIFE unavailable" in f for f in report["flags"])
     assert json.loads((tmp_path / "recap_assembly.json").read_text())["replays"]
@@ -437,8 +477,8 @@ def test_load_rois_merges_per_camera_with_rois_json_precedence(tmp_path):
     assert rois["cam2"]["net"] == [30, 30, 100, 60]  # auto fills the missing camera
 
 
-def test_replay_punch_in_centers_the_goal_box_pixel(tmp_path):
-    """Pixel test: the box center must land at frame center, with and without levelling."""
+def test_replay_keeps_goal_pixels_below_center_and_players_visible(tmp_path):
+    """The replay keeps the goal below center, with and without levelling."""
     cv2 = pytest.importorskip("cv2")
     import numpy as np
 
@@ -463,22 +503,23 @@ def test_replay_punch_in_centers_the_goal_box_pixel(tmp_path):
         assert len(xs) > 50  # the marker is present
         return xs.mean(), ys.mean()
 
-    for marker in ((800, 300), (900, 250), (400, 450)):
+    for marker in ((640, 380), (680, 400), (600, 420)):
         for angle in (0.0, 6.0):
             cx, cy = marker_centroid(marker, angle)
-            assert cx == pytest.approx(960, abs=12), f"{marker} angle {angle}: x {cx:.0f}"
-            assert cy == pytest.approx(540, abs=12), f"{marker} angle {angle}: y {cy:.0f}"
+            expected_x = 960 if angle == 0 else 974
+            assert cx == pytest.approx(expected_x, abs=12), f"{marker} angle {angle}: x {cx:.0f}"
+            assert 600 <= cy <= 700, f"{marker} angle {angle}: y {cy:.0f}"
 
 
 def test_tight_zoom_rotation_is_aspect_corrected():
     """The ROI center rotates in pixel space, not fraction space (16:9 frame)."""
-    rois = {"cam1": {"net": [700, 250, 200, 100]}}  # raw center fraction (0.64205, 0.40530)
+    rois = {"cam1": {"net": [580, 340, 200, 100]}}
     zoom, found = A._tight_zoom("cam1", rois, 6.0)
     assert found and zoom["type"] == "roi"
-    assert zoom["wf"] == pytest.approx(0.4)  # clamped by ZOOM_TIGHT_MAX
+    assert zoom["wf"] == pytest.approx(.8)  # Preserve surrounding play.
     dx, dy = zoom["cx"] - .5, zoom["cy"] - .5
-    raw_cx, raw_cy = (800 / 1280 - A.FISHEYE_CROP) / (1 - 2 * A.FISHEYE_CROP), \
-        (300 / 720 - A.FISHEYE_CROP) / (1 - 2 * A.FISHEYE_CROP)
+    raw_cx, raw_cy = (680 / 1280 - A.FISHEYE_CROP) / (1 - 2 * A.FISHEYE_CROP), \
+        (340 / 720 - A.FISHEYE_CROP) / (1 - 2 * A.FISHEYE_CROP)
     angle = math.radians(6.0)
     expected_cx = .5 + (raw_cx - .5) * math.cos(angle) + (raw_cy - .5) * math.sin(angle) * (720 / 1280)
     expected_cy = .5 - (raw_cx - .5) * math.sin(angle) * (1280 / 720) + (raw_cy - .5) * math.cos(angle)
@@ -501,3 +542,17 @@ def test_verify_sources_keeps_a_live_clip_whose_replay_overruns(tmp_path):
     assert not plan["replays"]  # the overruning replay is dropped
     assert any("replay tight shot" in f and "shorter than its manifest duration" in f
                for f in plan["flags"])
+def test_saved_goal_review_restores_confirmed_candidate_without_lowering_threshold(tmp_path):
+    from recap_assembly import load_play_reviews
+    original = {"goals": [{"id": "away:2", "chosen": None,
+                 "best_candidate": {"candidate_id": "whistle:55", "camera": "cam2", "t": 2967.25}}]}
+    source = {"candidate_id": "whistle:55", "primary_cam": "cam2", "detection_s": 2967.25}
+    (tmp_path / "play_review.json").write_text(json.dumps({"schema_version": 1, "plays": {},
+        "goals": {"away:2": {"status": "keep", "source": source}}}))
+    reviewed = load_play_reviews(tmp_path, original)
+    assert reviewed["goals"][0]["chosen"]["detection_s"] == 2967.25
+    assert reviewed["goals"][0]["chosen"]["primary_cam"] == "cam2"
+    assert original["goals"][0]["chosen"] is None
+    original["goals"][0]["best_candidate"]["t"] = 2968
+    with pytest.raises(ValueError, match="stale goal review"):
+        load_play_reviews(tmp_path, original)

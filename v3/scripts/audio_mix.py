@@ -80,7 +80,8 @@ PLACEHOLDER_DUR_S = {cue: spec[0] for cue, spec in _PLACEHOLDER_SPEC.items()}
 # Timeline
 # ---------------------------------------------------------------------------
 
-def build_timeline(plan: dict) -> list[dict]:
+def build_timeline(plan: dict, *, selection: dict | None = None,
+                   audio_signals: dict | None = None) -> list[dict]:
     """
     The output cut timeline: plan clips in plan order, each followed by its
     replays, with output positions. `frames / FPS` is the exact piece length,
@@ -90,13 +91,34 @@ def build_timeline(plan: dict) -> list[dict]:
     sequence = recap_sequence(plan)
     tl: list[dict] = []
     out = 0.0
-    for entry in sequence:
+    for entry_index, entry in enumerate(sequence):
         speed = float(entry.get("speed") or 1.0)
         out_dur = float(entry["frames"]) / FPS
         e = dict(entry)
         e["out_start"] = out
         e["out_dur"] = out_dur
         e["moment_out"] = out + (float(entry.get("moment_s", entry["start_s"])) - float(entry["start_s"])) / speed
+        if entry.get("kind") == "goal" and selection is not None:
+            goal = next((g for g in selection.get("goals", []) if g["id"] == entry["goal_id"]), {})
+            candidate_id = (goal.get("chosen") or {}).get("candidate_id", "")
+            whistles = (audio_signals or {}).get("whistles", [])
+            confirmation = None
+            if candidate_id.startswith("whistle:"):
+                try:
+                    index = int(candidate_id.split(":", 1)[1])
+                    if index >= 0:
+                        confirmation = float(whistles[index]["t"])
+                except (ValueError, IndexError, KeyError, TypeError):
+                    pass
+            moment = float(entry["moment_s"])
+            valid = (confirmation is not None and math.isfinite(confirmation)
+                     and moment <= confirmation <= moment + 3.0 + .5 / 12 + .001
+                     and entry["start_s"] <= confirmation <= entry["end_s"] + .5 / 12 + .001)
+            if valid and (confirmation - entry["start_s"]) / speed >= out_dur:
+                following = sequence[entry_index + 1] if entry_index + 1 < len(sequence) else {}
+                valid = (following.get("goal_id") == entry["goal_id"]
+                         and following.get("kind") not in ("goal", "play"))
+            e["confirmation_out"] = out + (confirmation - entry["start_s"]) / speed if valid else None
         parts, tl_pos, out_pos = [], float(entry["start_s"]), out
         for p in entry.get("parts") or []:
             q = dict(p)
@@ -165,19 +187,24 @@ def plan_cues(entries: list[dict], perspective: str = "neutral", focus_side: str
 
     opening = next((e for e in entries if e.get("kind") == "stinger"), None)
     open_t = opening["out_start"] if opening else 0.0
-    add("game_start", open_t)
+    opening_duration = (opening["out_dur"] if opening is not None and
+                        "game_start" not in (cue_durations or {}) else durs["game_start"])
+    add("game_start", open_t, dur_s=opening_duration)
     if perspective == "neutral":
         add("sting_neutral", open_t)
     for e in entries:
         if e.get("kind") == "goal":
             side = goal_side(e)
+            confirmation = e.get("confirmation_out", e["moment_out"])
+            if confirmation is None:
+                continue
             if perspective != "focus" or focus_side is None or side == focus_side:
-                add("horn", e["moment_out"], goal_id=e["goal_id"], side=side)
+                add("horn", confirmation, goal_id=e["goal_id"], side=side)
             if e["goal_id"] in pp_goals:
                 add("sting_power_play", e["out_start"], goal_id=e["goal_id"])
             if e["goal_id"] in comic_calls:
                 add("sting_comic_call", e["out_start"], goal_id=e["goal_id"])
-            add("sfx_goal_card", e["moment_out"], goal_id=e["goal_id"])
+            add("sfx_goal_card", confirmation, goal_id=e["goal_id"])
         elif e.get("kind") == "play":
             pk = e.get("play_kind")
             if pk in penalty_kinds:
@@ -190,7 +217,8 @@ def plan_cues(entries: list[dict], perspective: str = "neutral", focus_side: str
     for w in period_wipes:
         add("sfx_period_wipe", w)
     close_id = _close_cue(perspective, focus_side, goal_counts, entries)
-    close_t = duration_s - durs.get(close_id, 2.0)
+    closing = next((e for e in entries if e.get("kind") == "final"), None)
+    close_t = closing["out_start"] if closing else duration_s - durs.get(close_id, 2.0)
     add("sfx_final_card", close_t)
     add(close_id, close_t)
     cues.sort(key=lambda c: (c["t"], 1 if c["cue"].startswith("close_") else 0))
@@ -283,6 +311,9 @@ def plan_bed(tl: list[dict], periods: list[dict], beds: list[dict], rotation_key
     runs: list[tuple[int, list[dict]]] = []
     first_play = next((e for e in tl if e.get("kind") not in ("cold_open", "stinger")), tl[0])
     for e in tl:
+        if e.get("kind") == "final" and runs:
+            runs[-1][1].append(e)
+            continue
         source = first_play if e.get("kind") in ("cold_open", "stinger") else e
         per = period_of(float(source.get("moment_s") or source.get("start_s") or 0.0), periods)
         if runs and runs[-1][0] == per:
@@ -340,13 +371,64 @@ def duck_envelope(n: int, sr: int, events: list[dict], duck_db: float = DUCK_DB,
 # Placeholder audio
 # ---------------------------------------------------------------------------
 
-def synth_placeholder(cue: str) -> np.ndarray:
+def synth_placeholder(cue: str, *, duration_s: float | None = None) -> np.ndarray:
     dur, freqs, decay = _PLACEHOLDER_SPEC.get(cue, (0.25, (440.0,), 0.04))
+    if duration_s is not None:
+        dur = duration_s
+    if cue == "game_start" and duration_s is not None:
+        return _opening_sound(dur)
     n = max(1, int(dur * SR))
     t = np.arange(n, dtype=np.float32) / SR
     wave = sum(np.sin(2.0 * np.pi * f * t) for f in freqs) / max(1, len(freqs))
     x = (wave * np.exp(-t / decay)).astype(np.float32)
     return np.stack([x, x], axis=1)
+
+
+def _opening_sound(duration_s: float) -> np.ndarray:
+    """Original review sound: room tone, scrape, impact, crackle, crack, plate, and pane whoosh."""
+    from scipy.signal import butter, sosfilt
+    if not math.isfinite(duration_s) or duration_s <= 0:
+        raise ValueError("opening sound duration must be positive and finite")
+    n = max(1, round(duration_s * SR))
+    t = np.arange(n) / SR
+    # Reference choreography lasts 135 frames at 30 fps.
+    f = t * 135 / duration_s
+    frame_s = duration_s / 135
+    rng = np.random.default_rng(1731)
+    noise = rng.standard_normal(n)
+    band = lambda lo, hi: sosfilt(butter(2, [lo, hi], btype="bandpass", fs=SR, output="sos"), noise)
+    blade, air, crisp = band(650, 8500), band(150, 1200), band(3000, 12000)
+    age_at = lambda frame: np.maximum(0, t - frame * frame_s) * (f >= frame)
+    room = air * .012 * np.clip(f / 4, 0, 1)
+    scrape = np.sin(np.pi * np.clip((f - 4) / 22, 0, 1)) ** .8
+    hit = age_at(26)
+    impact = (np.sin(2 * np.pi * 50 * hit) * np.exp(-hit / .11) * .6 +
+              blade * np.exp(-hit / .03) * .25) * (f >= 26)
+    # Deterministic crackle densifies while frost grows (frames 26-46).
+    grains = np.zeros(n)
+    times = np.sort(26 + 20 * np.sqrt(rng.random(70)))
+    for frame in times:
+        g = age_at(frame)
+        grains += crisp * np.exp(-g / .004) * (f >= frame) * .15
+    crackle = grains * np.clip((f - 26) / 20, 0, 1) * (f < 48)
+    crack_age = age_at(46)
+    crack = (crisp * 1.4 + blade * .8) * np.exp(-crack_age / .05) * (f >= 46)
+    crack += np.sin(2 * np.pi * 140 * crack_age) * np.exp(-crack_age / .09) * .3 * (f >= 46)
+    shing_age = age_at(62)
+    shing = sum(np.sin(2 * np.pi * hz * shing_age) for hz in (2400, 3600, 5100))
+    shing *= .03 * np.exp(-shing_age / .3) * (f >= 62)
+    thunk_age = age_at(66)
+    thunk = (np.sin(2 * np.pi * 95 * thunk_age) * .45 + air * .5) * np.exp(-thunk_age / .07) * (f >= 66)
+    # The camera push and the ice flash cover the cut at frame 135.
+    whoosh = air * 1.2 * np.clip((f - 120) / 14, 0, 1) ** 2
+    whoosh += crisp * .35 * np.clip((f - 124) / 10, 0, 1) ** 2
+    movement = blade * .2 * scrape + whoosh
+    pan = np.interp(f, [4, 26, 120, 135], [.45, 0, -.5, .5])
+    centre = room + impact + crackle + crack + shing + thunk
+    sound = np.column_stack([movement * np.sqrt((1 - pan) / 2) + centre,
+                             movement * np.sqrt((1 + pan) / 2) + centre])
+    sound *= min(1, .8 / max(.8, float(np.max(np.abs(sound)))))
+    return _edge_fade(sound.astype(np.float32))
 
 
 def synth_placeholder_bed() -> np.ndarray:
@@ -604,6 +686,14 @@ def _load_json(path: Path):
 # Main
 # ---------------------------------------------------------------------------
 
+def period_wipe_times(bed_segments, options) -> list:
+    """Period boundaries that get a wipe and its sound. A short Recap uses plain
+    cuts; the scorebug shows the new period. Full-game modes opt in."""
+    if not options.get("period_transitions"):
+        return []
+    return [s["boundary"] for s in bed_segments[1:]]
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     root = Path(args.game_folder)
@@ -632,6 +722,8 @@ def main(argv=None) -> int:
     if music is None:
         flag("music_spans.json is missing; PA music was not muted")
     selection = _load_json(root / "selection.json") or {}
+    from recap_assembly import load_play_reviews
+    selection = load_play_reviews(root, selection)
     if not selection.get("periods"):
         flag("selection.json has no periods; the Bed runs as one segment")
     sheet = _load_json(root / "game_sheet.json") or {}
@@ -656,7 +748,11 @@ def main(argv=None) -> int:
                 for i, g in enumerate((sheet.get("goals") or {}).get(side) or [], 1)
                 if g.get("type") == "PP"}
 
-    tl = build_timeline(plan)
+    tl = build_timeline(plan, selection=selection,
+                        audio_signals=_load_json(root / "audio_signals.json") or {})
+    for entry in tl:
+        if entry["kind"] == "goal" and entry.get("confirmation_out") is None:
+            flags.append(f"{entry['goal_id']}: goal confirmation unavailable; horn and GOAL card omitted")
     duration_s = float(plan.get("duration_s") or sum(e["frames"] for e in tl) / FPS)
     n = int(round(duration_s * SR))
 
@@ -670,7 +766,8 @@ def main(argv=None) -> int:
         from cue_library import select_beds
         history_path = Path(manifest_path).expanduser().resolve().parent / "rotation.json"
         used_periods = sorted({period_of(float(e.get("moment_s") or e.get("start_s") or 0),
-                                        selection.get("periods") or []) for e in tl})
+                                        selection.get("periods") or []) for e in tl
+                               if e.get("kind") not in ("cold_open", "stinger", "final")})
         try:
             bed_choices, rotation_flags = select_beds(beds, rotation_key, used_periods, history_path)
         except ValueError as exc:
@@ -705,7 +802,7 @@ def main(argv=None) -> int:
     cues = plan_cues(tl, perspective=perspective, focus_side=focus_side, duration_s=duration_s,
                      pp_goals=pp_goals, comic_calls=comic_calls,
                      goal_counts=_sheet_goal_counts(sheet),
-                     period_wipes=[s["boundary"] for s in bed_segments[1:]],
+                     period_wipes=period_wipe_times(bed_segments, options),
                      cue_durations=cue_durations or None)
     if not any(c["cue"] == "sting_fight" for c in cues):
         flag("no fight clips in the plan: sting_fight did not fire "
@@ -745,7 +842,8 @@ def main(argv=None) -> int:
                 continue
             buf = buf * (10.0 ** (float(mc.get("gain_db") or 0.0) / 20.0))
         else:
-            buf = synth_placeholder(c["cue"])
+            timed_open = c["cue"] == "game_start" and any(e["kind"] == "stinger" for e in tl)
+            buf = synth_placeholder(c["cue"], duration_s=c["dur_s"] if timed_open else None)
         _place(master, _edge_fade(fit_to_length(buf, int(round(c["dur_s"] * SR)))), c["t"])
 
     with tempfile.TemporaryDirectory(prefix="hockey-mix-") as scratch:

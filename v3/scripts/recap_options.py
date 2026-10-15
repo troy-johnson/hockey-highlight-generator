@@ -31,6 +31,7 @@ DEFAULTS: dict = {
     "date": None,
     "focus_team": None,
     "perspective": "neutral",
+    "kit": None,                    # Focus Team kit name from its Team Config "kits"
     "live_play_speed": 1.10,
     "start": "stinger",             # stinger | cold_open | play
     "rois": {"source": "keep_existing"},   # keep_existing | auto (like hockeydetect)
@@ -43,7 +44,7 @@ DEFAULTS: dict = {
 }
 
 # Keys of the per-game file (layer 3). Other keys in the file are plain overrides.
-GAME_KEYS = ("league", "opponent", "date", "focus_team", "perspective", "live_play_speed", "start")
+GAME_KEYS = ("league", "opponent", "date", "focus_team", "perspective", "kit", "live_play_speed", "start")
 
 _FOLDER_NAME = re.compile(r"^(?P<opponent>.+)_(?P<mm>\d{2})(?P<dd>\d{2})(?P<yyyy>\d{4})$")
 
@@ -96,8 +97,13 @@ def _match_team(name: str | None, teams: dict[str, dict]) -> str | None:
     return None
 
 
-def infer_game_values(game_folder: str, leagues: dict, teams: dict) -> dict[str, dict]:
-    """Inferred layer-3 entries: {key: {"value", "inferred": True, "source"}}."""
+def infer_game_values(game_folder: str, leagues: dict, teams: dict,
+                      pinned_focus: str | None = None) -> dict[str, dict]:
+    """Inferred layer-3 entries: {key: {"value", "inferred": True, "source"}}.
+
+    pinned_focus is a Focus Team the user set; values that depend on the Focus
+    Team (kit, league) follow it instead of the inferred one.
+    """
     def entry(value, source):
         return {"value": value, "inferred": True, "source": source}
 
@@ -112,9 +118,11 @@ def infer_game_values(game_folder: str, leagues: dict, teams: dict) -> dict[str,
         out["focus_team"] = entry(own[0], "the only own team in Team Config")
     else:
         out["focus_team"] = entry(None, f"{len(own)} own teams in Team Config; choose one")
-    focus = out["focus_team"]["value"]
+    focus = pinned_focus or out["focus_team"]["value"]
     out["perspective"] = entry("focus" if focus else "neutral",
                                "Focus Team known" if focus else "no Focus Team")
+    kit = teams.get(focus, {}).get("default_kit") if focus else None
+    out["kit"] = entry(kit, f"default_kit of {focus}" if kit else "no default_kit in Team Config")
 
     league = teams.get(focus, {}).get("league") if focus else None
     if league:
@@ -136,7 +144,9 @@ def load_game_file(game_folder: str, leagues: dict, teams: dict) -> tuple[dict, 
     path = Path(game_folder) / OPTIONS_FILE
     created = not path.exists()
     data = {} if created else json.loads(path.read_text())
-    inferred = infer_game_values(game_folder, leagues, teams)
+    pinned = data.get("focus_team")
+    pinned = pinned.get("value") if isinstance(pinned, dict) and pinned.get("inferred") is False else None
+    inferred = infer_game_values(game_folder, leagues, teams, pinned)
     changed = created
     for key in GAME_KEYS:
         cur = data.get(key)
@@ -194,11 +204,17 @@ def resolve_options(game_folder: str, cli: dict | None = None, cfg_override: str
     focus = teams.get(focus_id, {}) if focus_id else {}
 
     opts = deep_merge(DEFAULTS, league.get("options", {}))
+    opts["league_rules"] = deep_merge({k: v for k, v in league.items() if k != "options"},
+                                     opts.get("league_rules", {}))
     opts = deep_merge(opts, focus.get("options", {}))
+    opts["teams"] = deep_merge(teams, opts.get("teams", {}))
     opts = deep_merge(opts, game_values)
     opts = deep_merge(opts, cli)
-    opts["league_rules"] = {k: v for k, v in league.items() if k != "options"}
-    opts["teams"] = teams
+    # A CLI Focus Team changes its default kit for this run only (never written).
+    kit_entry = game.get("kit")
+    if "focus_team" in cli and "kit" not in cli and (
+            not isinstance(kit_entry, dict) or kit_entry.get("inferred", True) is True):
+        opts["kit"] = (opts["teams"].get(focus_id) or {}).get("default_kit") if focus_id else None
     opts["_layers"] = {
         "config_dir": str(cfg),
         "league": f"leagues/{league_id}.json" if league else None,
@@ -212,7 +228,7 @@ def resolve_options(game_folder: str, cli: dict | None = None, cfg_override: str
         flags.append(f"League '{league_id}' has no config in {cfg / 'leagues'}")
     if focus_id and not focus:
         flags.append(f"Focus Team '{focus_id}' has no Team Config in {cfg / 'teams'}")
-    if not teams:
+    if not opts["teams"]:
         flags.append(f"No Team Config in {cfg / 'teams'}; Focus Team and Roster unknown")
     opts["_flags"] = flags
     return opts

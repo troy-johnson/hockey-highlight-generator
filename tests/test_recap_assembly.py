@@ -18,7 +18,34 @@ def fixture(n=1):
     return {"goals": goals}, layout
 
 
-@pytest.mark.parametrize("count,before,after", [(6, 6, 6), (7, 5, 5), (12, 5, 5), (13, 4, 3)])
+def test_goals_keep_one_replay_and_no_extra_celebration():
+    selection, layouts = fixture(5)
+    selection["goals"][0]["best_goal"] = True
+    selection["goals"][-1]["cut"] = True
+    plan = A.plan_recap(selection, layouts, source_fps={"cam2": 60})
+    assert len(plan["clips"]) == 5
+    for clip in plan["clips"]:
+        shots = [r for r in plan["replays"] if r["goal_id"] == clip["goal_id"]]
+        assert len(shots) == 1
+        assert shots[0]["kind"] == "tight"
+        assert clip["end_s"] == pytest.approx(clip["moment_s"] + 3)
+
+
+def test_final_has_its_own_five_seconds_after_the_complete_replay():
+    selection, layouts = fixture(5)
+    original = A.plan_recap(selection, layouts, source_fps={"cam2": 60})
+    plan = A.plan_recap(selection, layouts, source_fps={"cam2": 60}, closing_s=5)
+    assert plan["clips"] == original["clips"]
+    assert plan["replays"] == original["replays"]
+    sequence = A.recap_sequence(plan)
+    assert sequence[-2]["kind"] == "tight"
+    assert sequence[-1]["kind"] == "final"
+    assert sequence[-1]["frames"] == 150
+    assert sequence[-1]["parts"] == []
+    assert plan["duration_s"] == pytest.approx(original["duration_s"] + 5)
+
+
+@pytest.mark.parametrize("count,before,after", [(6, 6, 3), (7, 5, 3), (12, 5, 3), (13, 4, 3)])
 def test_budget_tiers(count, before, after):
     plan = A.plan_recap(*fixture(count))
     clip = plan["clips"][0]
@@ -95,7 +122,7 @@ def test_invalid_selected_times(field, value):
 
 def test_clip_is_trimmed_to_recording_coverage_not_failed():
     selection, layouts = fixture(2)
-    layouts["cam2"] = [{"start": 100.04, "end": 149.967, "seek": 0, "files": [("a", 50)]}]
+    layouts["cam2"] = [{"start": 100.04, "end": 147.967, "seek": 0, "files": [("a", 48)]}]
     for g, shift in zip(selection["goals"], (85, 105)):  # moments at 105 and 145, near the block edges
         g["chosen"]["detection_s"] += shift
         g["chosen"]["start_s"] = g["chosen"]["detection_s"] - 6
@@ -103,7 +130,7 @@ def test_clip_is_trimmed_to_recording_coverage_not_failed():
     plan = A.plan_recap(selection, layouts)
     assert [c["goal_id"] for c in plan["clips"]] == ["home:0", "home:1"]
     assert plan["clips"][0]["start_s"] == 100.04
-    assert plan["clips"][1]["end_s"] == 149.967
+    assert plan["clips"][1]["end_s"] == 147.967
     assert any("trimmed to Recording coverage" in f for f in plan["flags"])
 
 

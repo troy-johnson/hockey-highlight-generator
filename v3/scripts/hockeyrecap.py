@@ -241,6 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--opponent")
         sp.add_argument("--focus-team", dest="focus_team")
         sp.add_argument("--perspective", choices=("focus", "neutral"))
+        sp.add_argument("--kit", help="Focus Team kit from its Team Config \"kits\", e.g. red, navy, white")
         sp.add_argument("--live-play-speed", dest="live_play_speed", type=float)
         sp.add_argument("--start", choices=("stinger", "cold_open", "play"))
 

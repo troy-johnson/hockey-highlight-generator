@@ -207,7 +207,7 @@ def test_batch_one_failed_game_does_not_stop_the_others(tmp_path):
 
 
 def test_real_stage_list_order():
-    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "audio", "coverage", "scoresheet", "selection", "assembly", "mix", "graphics"]
+    assert rr.STAGE_NAMES == ["discovery", "sync", "rois", "detection", "audio", "coverage", "scoresheet", "selection", "assembly", "mix", "graphics", "short"]
 
 
 def test_audio_stage_wiring(tmp_path):
@@ -438,3 +438,14 @@ def test_selection_argv_without_focus_team_stays_absent(tmp_path):
     payload = json.loads(argv[argv.index("--options") + 1])
     assert "focus_team" not in payload
     assert rr._fp_selection(ctx)["options"] == {"minimum_margin": 0.05}
+
+
+def test_changed_sheet_overrides_rerun_the_scoresheet_stage(tmp_path):
+    (tmp_path / "IMG_1.jpg").write_bytes(b"sheet photo")
+    ctx = rr.Context(tmp_path, {}, rr.Reporter())
+    before = rr._fp_scoresheet(ctx)
+    (tmp_path / "game_sheet_overrides.json").write_text('{"schema_version": 1, "teams": {"home": "A"}}')
+    changed = rr._fp_scoresheet(ctx)
+    assert changed != before and changed["sheets"] == before["sheets"]
+    (tmp_path / "game_sheet_overrides.json").write_text('{"schema_version": 1, "teams": {"home": "B"}}')
+    assert rr._fp_scoresheet(ctx) != changed

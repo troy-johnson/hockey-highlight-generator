@@ -557,7 +557,160 @@ def find_scoresheet_pdfs(game_folder: str) -> list[str]:
                   if p.is_file() and p.suffix.lower() == ".pdf" and not is_non_sheet_file(p.name))
 
 
-def main(game_folder: str) -> int:
+READ_FILE = "game_sheet_read.json"
+OVERRIDES_FILE = "game_sheet_overrides.json"
+OVERRIDE_KEYS = {"schema_version", "teams", "rosters", "goals", "penalties",
+                 "shots_on_goal", "goalkeeping", "score_by_periods",
+                 "date", "final_score", "dismiss_flags"}
+# Increase when the reader's output changes, so saved reads are read again.
+READER_VERSION = 1
+REQUIRED_FIELDS = {"goals": ("per", "time", "scorer"), "penalties": ("per", "player", "infraction")}
+SIDES = ("home", "away")
+
+
+def _side_map(overrides: dict, key: str) -> dict:
+    value = overrides.get(key, {})
+    if not isinstance(value, dict) or set(value) - set(SIDES):
+        raise ValueError(f"{key}: expected an object with 'home' and/or 'away'")
+    return value
+
+
+def apply_overrides(sheet: dict, overrides: dict, *, check_rows: bool = True) -> dict:
+    """Return a copy of the read Game Sheet with the user's corrections applied.
+
+    Row keys are 1-based indexes of the read rows; a higher index adds a row and
+    null removes one. A row with a 'was' object applies only while the read row
+    still has those values; otherwise it is flagged and skipped. A new row needs
+    its required fields unless check_rows is False (shape check before a read).
+    Raises ValueError for a malformed overrides file.
+    """
+    if not isinstance(overrides, dict) or overrides.get("schema_version") != 1:
+        raise ValueError("schema_version must be 1")
+    unknown = set(overrides) - OVERRIDE_KEYS
+    if unknown:
+        raise ValueError(f"unknown key(s): {', '.join(sorted(unknown))}")
+    out = json.loads(json.dumps(sheet))
+    out.setdefault("flags", [])
+    for side, name in _side_map(overrides, "teams").items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"teams.{side}: expected a name")
+        out.setdefault("teams", {})[side] = name.strip()
+    for side, entries in _side_map(overrides, "rosters").items():
+        if not isinstance(entries, dict):
+            raise ValueError(f"rosters.{side}: expected an object of number: name")
+        roster = out.setdefault("rosters", {}).setdefault(side, {})
+        for num, name in entries.items():
+            if name is None:
+                roster.pop(str(num), None)
+            elif isinstance(name, str):
+                roster[str(num)] = name
+            else:
+                raise ValueError(f"rosters.{side}.{num}: expected a name or null")
+    for key, label in (("goals", "goal"), ("penalties", "penalty")):
+        for side, rows in _side_map(overrides, key).items():
+            if not isinstance(rows, dict):
+                raise ValueError(f"{key}.{side}: expected an object of row number: fields")
+            read = out.setdefault(key, {}).setdefault(side, [])
+            result: dict[int, dict | None] = dict(enumerate(read, 1))
+            for index, fields in sorted(rows.items(), key=lambda kv: _row_index(key, side, kv[0])):
+                i = _row_index(key, side, index)
+                where = f"{side} {label} {i}"
+                if fields is not None and not isinstance(fields, dict):
+                    raise ValueError(f"{key}.{side}.{index}: expected fields or null")
+                was = (fields or {}).get("was") if fields else None
+                if was is not None and not isinstance(was, dict):
+                    raise ValueError(f"{key}.{side}.{index}.was: expected an object")
+                current = result.get(i)
+                if was and (current is None or any(current.get(k) != v for k, v in was.items())):
+                    out["flags"].append(f"{where}: override not applied; the read row no longer "
+                                        f"matches {json.dumps(was)}")
+                    continue
+                if fields is None:
+                    result[i] = None
+                    continue
+                row = dict(current or {})
+                row.update({k: v for k, v in fields.items() if k != "was"})
+                missing = [f for f in REQUIRED_FIELDS[key] if row.get(f) in (None, "")]
+                if check_rows and current is None and missing:
+                    raise ValueError(f"{key}.{side}.{index}: a new row needs {', '.join(missing)}")
+                result[i] = _normalized_row(key, row)
+            out[key][side] = [r for _, r in sorted(result.items()) if r is not None]
+    for key in ("shots_on_goal", "score_by_periods"):
+        for side, values in _side_map(overrides, key).items():
+            if not isinstance(values, list):
+                raise ValueError(f"{key}.{side}: expected a list by period")
+            out.setdefault(key, {})[side] = values
+    for side, rows in _side_map(overrides, "goalkeeping").items():
+        if not isinstance(rows, list) or not all(isinstance(r, dict) and "player" in r for r in rows):
+            raise ValueError(f"goalkeeping.{side}: expected a list of rows with 'player'")
+        out.setdefault("goalkeeping", {})[side] = rows
+    if "date" in overrides:
+        if not isinstance(overrides["date"], str) or not overrides["date"].strip():
+            raise ValueError("date: expected text such as 2026-02-01")
+        out["date"] = overrides["date"].strip()
+    for side, value in _side_map(overrides, "final_score").items():
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"final_score.{side}: expected a whole number")
+        out.setdefault("final_score", {})[side] = value
+    dismiss = overrides.get("dismiss_flags", [])
+    if not isinstance(dismiss, list) or not all(isinstance(f, str) for f in dismiss):
+        raise ValueError("dismiss_flags: expected a list of flag texts")
+    for flag in dismiss:
+        if flag in out["flags"]:
+            out["flags"] = [f for f in out["flags"] if f != flag]
+        else:
+            out["flags"].append(f"dismiss_flags: {json.dumps(flag)} not dismissed; "
+                                f"the read has no such flag")
+    return out
+
+
+def _row_index(key: str, side: str, index) -> int:
+    try:
+        i = int(index)
+    except (TypeError, ValueError):
+        i = 0
+    if i < 1:
+        raise ValueError(f"{key}.{side}.{index}: row numbers start at 1")
+    return i
+
+
+def _normalized_row(key: str, row: dict) -> dict:
+    row["status"], row["reasons"], row["source"] = "ok", [], "override"
+    if key == "goals":
+        row["time_s"] = parse_time(row.get("time"))
+        row.setdefault("assists", [])
+        row["type"] = str(row.get("type") or "").upper()
+    else:
+        row["infraction"] = str(row.get("infraction") or "").upper()
+        if row.get("minutes") is not None:
+            row["minutes"] = str(row["minutes"])
+    for field in ("per", "scorer", "player"):
+        if row.get(field) is not None:
+            row[field] = str(row[field])
+    if not isinstance(row.get("assists", []), list):
+        raise ValueError("assists: expected a list of numbers")
+    return row
+
+
+def _file_identity(path: str) -> list:
+    st = Path(path).stat()
+    return [Path(path).name, st.st_size, int(st.st_mtime)]
+
+
+def _read_sheet(game_folder: str) -> tuple[dict | None, int]:
+    """Read the sheet, or reuse the saved read while its source files are unchanged."""
+    root = Path(game_folder)
+    sources = find_scoresheet_pdfs(game_folder) + find_scoresheet_photos(game_folder)[:1]
+    identity = [_file_identity(p) for p in sources]
+    saved = root / READ_FILE
+    if saved.exists():
+        try:
+            cached = json.loads(saved.read_text())
+            if (cached.get("source") == identity and cached.get("reader") == READER_VERSION
+                    and isinstance(cached.get("sheet"), dict)):
+                return cached["sheet"], 0
+        except (OSError, ValueError):
+            pass
     sheet = None
     for pdf in find_scoresheet_pdfs(game_folder):
         sys.path.insert(0, str(Path(__file__).parent))
@@ -570,18 +723,42 @@ def main(game_folder: str) -> int:
     if sheet is None:
         photos = find_scoresheet_photos(game_folder)
         if not photos:
-            print("[scoresheet] No Scoresheet photo or GameSheet PDF in the Game Folder; "
-                  "the Game Sheet must be entered in review", flush=True)
-            return 2
-        crops = Path(game_folder) / "scoresheet_crops"
+            return None, 2
+        crops = root / "scoresheet_crops"
         crops.mkdir(exist_ok=True)
         try:
             sheet = read_scoresheet(photos[0], str(crops))
         except ImportError as e:
             print(f"[scoresheet] Scoresheet reader needs the optional ML stack "
                   f"(requirements-ml.txt): {e}", flush=True)
-            return 4
-    (Path(game_folder) / "game_sheet.json").write_text(json.dumps(sheet, indent=2))
+            return None, 4
+    saved.write_text(json.dumps({"source": identity, "reader": READER_VERSION, "sheet": sheet}, indent=2))
+    return sheet, 0
+
+
+def main(game_folder: str) -> int:
+    root = Path(game_folder)
+    overrides = None
+    if (root / OVERRIDES_FILE).exists():
+        try:
+            overrides = json.loads((root / OVERRIDES_FILE).read_text())
+            apply_overrides({}, overrides, check_rows=False)
+        except ValueError as e:
+            print(f"[scoresheet] {OVERRIDES_FILE} is invalid: {e}", flush=True)
+            return 1
+    sheet, rc = _read_sheet(game_folder)
+    if sheet is None:
+        if rc == 2:
+            print("[scoresheet] No Scoresheet photo or GameSheet PDF in the Game Folder; "
+                  "the Game Sheet must be entered in review", flush=True)
+        return rc
+    if overrides is not None:
+        try:
+            sheet = apply_overrides(sheet, overrides)
+        except ValueError as e:
+            print(f"[scoresheet] {OVERRIDES_FILE} is invalid: {e}", flush=True)
+            return 1
+    (root / "game_sheet.json").write_text(json.dumps(sheet, indent=2))
     rows = sheet["goals"]["home"] + sheet["goals"]["away"] + sheet["penalties"]["home"] + sheet["penalties"]["away"]
     review = sum(r["status"] == "review" for r in rows)
     print(f"[scoresheet] game_sheet.json written: {len(sheet['goals']['home'])}+{len(sheet['goals']['away'])} goals, "

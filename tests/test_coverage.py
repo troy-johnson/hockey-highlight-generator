@@ -148,6 +148,18 @@ def test_plan_periods_finds_both_breaks_and_period_starts():
     assert not plan["flags"]
 
 
+def test_plan_periods_accepts_moderately_quiet_low_flow_breaks():
+    act, flows, whistles, breaks, starts, end = synthetic_game(weak=[(800, 60)])
+    for start, finish in breaks:
+        act[start:finish] = .25
+    candidates = C.break_candidates(act, flows, starts[0] + 120, len(act))
+    timing = C.league_timing({"periods": 3, "period_minutes": 13, "clock": "stop"})
+    plan = C.plan_periods(candidates, float(starts[0]), act, float(len(act)), whistles, timing)
+    assert [p["start"] for p in plan["periods"]] == [float(s) for s in starts]
+    assert plan["end"]["t"] == float(end)
+    assert not plan["flags"]
+
+
 def test_plan_candidates_exclude_the_other_chosen_breaks():
     act, flows, ws, breaks, starts, _ = synthetic_game(weak=[(800, 35)])
     cands = C.break_candidates(act, flows, starts[0] + 120, len(act))
@@ -198,6 +210,26 @@ def test_stop_clock_rejects_periods_shorter_than_the_period_length():
     timing = C.league_timing({"periods": 3, "period_minutes": 15, "clock": "stop"})
     plan = C.plan_periods(cands, float(starts[0]), act, float(len(act)), ws, timing)
     assert [p["start"] for p in plan["periods"]] == [float(s) for s in starts]
+
+
+def test_missing_breaks_do_not_end_stop_clock_game_before_total_play_time():
+    act, _, whistles, _, starts, end = synthetic_game(period=1100, brk=0)
+    act[1200:1255] = QUIET
+    timing = C.league_timing({"periods": 3, "period_minutes": 13, "clock": "stop"})
+    plan = C.plan_periods([], float(starts[0]), act, float(len(act)), whistles, timing)
+    assert plan["end"]["t"] == float(end)
+    assert len(plan["periods"]) == 1
+    assert any("found 0 of 2 breaks" in f for f in plan["flags"])
+    assert plan["end"]["uncertain"]
+
+
+def test_missing_structure_without_whistles_marks_end_uncertain():
+    act, _, _, _, starts, end = synthetic_game(period=1100, brk=0)
+    timing = C.league_timing({"periods": 3, "period_minutes": 13, "clock": "stop"})
+    plan = C.plan_periods([], float(starts[0]), act, float(len(act)), [], timing)
+    assert plan["end"]["t"] == float(end)
+    assert plan["end"]["uncertain"]
+    assert "no period structure" in plan["flags"][0]
 
 
 def test_manifest_layout_and_chapter_time_with_seek():

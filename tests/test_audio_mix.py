@@ -59,6 +59,43 @@ def test_build_timeline_multi_part_positions():
 
 # --- PA music muting ---------------------------------------------------------
 
+def test_goal_card_waits_for_matched_whistle_after_motion_peak():
+    entry = _entry("away:1", start=100, end=110, moment=105, speed=1)
+    selection = {"goals": [{"id": "away:1", "chosen": {"candidate_id": "whistle:1"}}]}
+    signals = {"whistles": [{"t": 104}, {"t": 107}]}
+    tl = am.build_timeline(_plan([entry]), selection=selection, audio_signals=signals)
+    cues = am.plan_cues(tl, duration_s=10)
+    assert next(c for c in cues if c["cue"] == "sfx_goal_card")["t"] == 7
+    assert next(c for c in cues if c["cue"] == "horn")["t"] == 7
+    assert tl[0]["moment_out"] == 5
+    assert tl[0]["confirmation_out"] == 7
+    signals["whistles"][1]["t"] = 104
+    tl = am.build_timeline(_plan([entry]), selection=selection, audio_signals=signals)
+    assert not any(c["cue"] == "sfx_goal_card" for c in am.plan_cues(tl, duration_s=10))
+
+
+def test_goal_confirmation_at_rounded_live_cut_edge_starts_on_replay():
+    entry = _entry("away:1", start=100, end=109, moment=106, speed=1)
+    replay = _entry("away:1", kind="tight", start=104.25, end=108.25,
+                    moment=106, speed=.5)
+    selection = {"goals": [{"id": "away:1", "chosen": {"candidate_id": "whistle:0"}}]}
+    signals = {"whistles": [{"t": 109.02}]}
+    tl = am.build_timeline(_plan([entry], [replay]), selection=selection, audio_signals=signals)
+    assert tl[0]["confirmation_out"] == pytest.approx(9.02)
+    assert next(c for c in am.plan_cues(tl, duration_s=17)
+                if c["cue"] == "sfx_goal_card")["t"] == pytest.approx(9.02)
+
+
+def test_goal_confirmation_past_cut_without_replay_does_not_announce_over_next_play():
+    entry = _entry("away:1", start=100, end=109, moment=106, speed=1)
+    following = _entry("home:1", start=200, end=209, moment=206, speed=1)
+    selection = {"goals": [{"id": "away:1", "chosen": {"candidate_id": "whistle:0"}}]}
+    tl = am.build_timeline(_plan([entry, following]), selection=selection,
+                           audio_signals={"whistles": [{"t": 109.02}]})
+    assert tl[0]["confirmation_out"] is None
+    assert not any(c.get("goal_id") == "away:1" and c["cue"] in ("horn", "sfx_goal_card")
+                   for c in am.plan_cues(tl, duration_s=18))
+
 def _span(cam, start, end, state="mute"):
     return {"camera": cam, "start": start, "end": end, "state": state}
 
@@ -111,6 +148,39 @@ def test_game_start_and_neutral_sting_at_open():
     assert [c for c in cues if c["cue"] == "game_start"][0]["t"] == 0.0
     assert [c for c in cues if c["cue"] == "sting_neutral"][0]["t"] == 0.0
     assert not [c for c in _cues("focus", focus_side="home") if c["cue"] == "sting_neutral"]
+
+
+def test_opening_sound_follows_skate_impact_hold_and_exit():
+    opening = {"kind": "stinger", "frames": 135, "start_s": 0, "moment_s": 0,
+               "speed": 1, "parts": [], "out_start": 0, "out_dur": 4.5}
+    cues = am.plan_cues([opening], duration_s=4.5)
+    hit = next(c for c in cues if c["cue"] == "game_start")
+    assert hit["dur_s"] == 4.5
+    audio = am.synth_placeholder("game_start", duration_s=4.5)
+    assert audio.shape == (216000, 2)
+    assert np.isfinite(audio).all()
+    rms = lambda a, b: np.sqrt(np.mean(audio[int(a * am.SR):int(b * am.SR)] ** 2))
+    assert rms(.86, .96) > 2 * rms(2.5, 3.0)
+    assert rms(4.23, 4.47) > 2 * rms(2.5, 3.0)  # exit whoosh under the frost pane
+    assert np.max(np.abs(audio)) <= .85
+
+
+def test_opening_sound_marks_breakthrough_plate_and_frost_exit():
+    audio = am.synth_placeholder("game_start", duration_s=4.5)
+    rms = lambda a, b: np.sqrt(np.mean(audio[int(a * am.SR / 30):int(b * am.SR / 30)] ** 2))
+    hold = rms(80, 105)
+    assert rms(46, 49) > 2 * rms(42, 45)  # ice cracks as the crest breaks through
+    assert rms(66, 69) > 2 * rms(58, 62)  # matchup plate lands
+    assert rms(127, 134) > 1.5 * rms(108, 114)  # frost pane whoosh covers the hand-off
+    assert rms(0, 3) < rms(4, 26)      # quiet room tone before the skate
+
+
+def test_play_start_keeps_legacy_sound_without_a_visual_stinger():
+    audio = am.synth_placeholder("game_start")
+    assert audio.shape == (48000, 2)
+    frequencies = np.fft.rfftfreq(len(audio), 1 / am.SR)
+    peak = frequencies[np.argmax(np.abs(np.fft.rfft(audio[:, 0])))]
+    assert peak == 60
 
 
 def test_penalty_and_special_stings():
@@ -304,7 +374,16 @@ def test_mix_stage_wiring(tmp_path):
     assert stage.outputs(ctx) == ["recap_audio.json", "recap_audio.mp4"]
     argv = rr.mix_argv(ctx)
     assert argv[1].endswith("audio_mix.py") and argv[2] == str(tmp_path)
-    assert set(rr.mix_options(ctx)) == {"perspective", "focus_team", "comic_calls", "audio"}
+    assert set(rr.mix_options(ctx)) == {"perspective", "focus_team", "comic_calls", "audio",
+                                        "period_transitions"}
+
+
+def test_period_changes_are_plain_cuts_unless_transitions_are_enabled():
+    segments = [{"boundary": 0.0}, {"boundary": 40.0}, {"boundary": 80.0}]
+    assert am.period_wipe_times(segments, {}) == []
+    assert am.period_wipe_times(segments, {"period_transitions": True}) == [40.0, 80.0]
+    ctx = rr.Context(Path("."), {}, rr.Reporter())
+    assert rr.mix_options(ctx)["period_transitions"] is False
 
 
 def test_mix_options_resolve_focus_team_name():
@@ -325,7 +404,7 @@ def test_mix_fingerprint_hashes_its_inputs(tmp_path):
         (tmp_path / name).write_text("{}" if not name.endswith(".mp4") else "x")
     fp = next(s for s in rr.STAGES if s.name == "mix").fingerprint(ctx)
     assert set(fp["inputs"]) == {"recap_assembly.json", "music_spans.json", "selection.json",
-                                 "game_sheet.json", "recap.mp4"}
+                                 "game_sheet.json", "recap.mp4", "audio_signals.json", "play_review.json"}
     assert fp["options"] == rr.mix_options(ctx)
     assert "scripts" in fp
 
