@@ -614,6 +614,8 @@ def assembly_options(ctx):
 def opening_video(options: dict, team: dict) -> str | None:
     """The Focus Team's pre-rendered opening: "opening" in its kit, else in its Team Config.
     A relative path is relative to the config folder, like logos."""
+    if options.get("perspective") == "neutral":
+        return None
     kit = (team.get("kits") or {}).get(options.get("kit")) or {}
     value = kit.get("opening") if isinstance(kit, dict) else None
     value = value or team.get("opening")
@@ -709,12 +711,13 @@ def _fp_mix(ctx):
     video = _mix_plan_output(ctx)
     inputs: dict = {name: _file_hash(root / name) for name in
                     ("recap_assembly.json", "music_spans.json", "selection.json", "game_sheet.json",
-                     "audio_signals.json", "play_review.json")}
+                      "audio_signals.json", "coverage.json", "game_data.json", "play_review.json")}
     inputs[video] = file_identity(root / video)     # the plain Recap: identity, not a full hash
     return {"inputs": inputs,
             "manifest": file_identity(_mix_manifest_path(ctx)),
             "options": mix_options(ctx),
-            "scripts": [_file_hash(HERE / n) for n in ("audio_mix.py", "recap_assembly.py")]}
+            "scripts": [_file_hash(HERE / n) for n in ("audio_mix.py", "recap_assembly.py", "game_data.py",
+                                                       "whistle_presentation.py", "audio_signals.py")]}
 
 
 def _run_mix(ctx):
@@ -756,7 +759,8 @@ def _fp_graphics(ctx):
     root = ctx.game_folder
     video = _mix_outputs(ctx)[1]
     inputs: dict = {name: _file_hash(root / name) for name in
-              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_data.json", "play_review.json")}
+              ("recap_assembly.json", "recap_audio.json", "selection.json", "game_data.json", "coverage.json",
+               "audio_signals.json", "play_review.json")}
     inputs[video] = file_identity(root / video)
     options = frozen_graphics_options(ctx)
     logos = {}
@@ -767,7 +771,8 @@ def _fp_graphics(ctx):
         for kit, values in (team.get("kits") or {}).items():
             if isinstance(values, dict) and values.get("crest"):
                 logos[f"{key}:kit:{kit}:crest"] = _file_hash(logo_path(values["crest"], options))
-    sources = [HERE / "recap_graphics.py", HERE / "game_data.py", HERE / "audio_mix.py", HERE / "recap_assembly.py", PACKAGE / "render.mjs",
+    sources = [HERE / "recap_graphics.py", HERE / "game_data.py", HERE / "audio_mix.py", HERE / "whistle_presentation.py",
+               HERE / "recap_assembly.py", PACKAGE / "render.mjs",
                PACKAGE / "package.json", PACKAGE / "package-lock.json"]
     sources.extend(sorted((PACKAGE / "src").glob("*")))
     sources.extend(sorted((PACKAGE / "public").glob("*")))
@@ -821,11 +826,12 @@ def _fp_short(ctx):
         pass
     return {"inputs": {name: _file_hash(root / name) for name in
                        ("selection.json", "play_review.json", "game_data.json", "music_spans.json", "rois.json", "rois_auto.json",
-                         "cam1_concat.txt", "cam2_concat.txt", "chapters.json", "coverage.json")},
+                          "cam1_concat.txt", "cam2_concat.txt", "chapters.json", "coverage.json", "audio_signals.json")},
             "files": [file_identity(p) for p in camera_files(root)], "options": short_options(ctx),
             "manifest": _file_hash(manifest), "media": media, "rife_ready": rife_ready(),
             "scripts": {name: _file_hash(HERE / name) for name in
-                         ("short_clips.py", "game_data.py", "recap_assembly.py", "audio_mix.py", "cue_library.py", "recap_graphics.py", "selection.py")}}
+                          ("short_clips.py", "game_data.py", "recap_assembly.py", "audio_mix.py", "whistle_presentation.py",
+                           "audio_signals.py", "cue_library.py", "recap_graphics.py", "selection.py")}}
 
 
 def _run_short(ctx):

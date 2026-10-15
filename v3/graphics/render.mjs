@@ -30,7 +30,7 @@ if (!['score', 'state', 'info', 'hero', 'label'].every(k => /^#[0-9a-f]{6}$/i.te
 }
 if (!Array.isArray(props.events)) throw new Error('Graphics events must be an array');
 for (const event of props.events) {
-  if (!['scorebug', 'goal', 'penalty', 'call', 'period', 'final', 'open_stinger', 'matchup_rail', 'period_wipe', 'replay', 'replay_pane'].includes(event.kind)) {
+  if (!['scorebug', 'event_bar', 'goal', 'penalty', 'call', 'period', 'final', 'open_stinger', 'matchup_rail', 'period_wipe', 'replay', 'replay_pane'].includes(event.kind)) {
     throw new Error('Unknown graphics event');
   }
   if (!Number.isInteger(event.startFrame) || event.startFrame < 0 ||
@@ -71,7 +71,7 @@ if (range === '--validate') {
   process.exit(0);
 }
 const here = path.dirname(fileURLToPath(import.meta.url));
-const publicDir = path.join(outputDir, 'public');
+const publicDir = path.resolve(outputDir, 'public');
 fs.mkdirSync(publicDir, {recursive: true});
 // Keep local fonts available without a network request during rendering.
 for (const name of fs.readdirSync(path.join(here, 'public'))) {

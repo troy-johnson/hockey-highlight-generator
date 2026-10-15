@@ -21,6 +21,9 @@ def game():
         {"n": 1, "start": 0, "end": 100}, {"n": 2, "start": 100, "end": 200}],
         "goals": [{"id": "home:1", "period": 1, "elapsed_s": 20},
                   {"id": "home:2", "period": 2, "elapsed_s": 40}]}
+    selection["goals"][0]["chosen"] = {"candidate_id": "whistle:0"}
+    selection["goals"][1]["chosen"] = {"candidate_id": "whistle:1"}
+    selection["plays"] = [{"id": "penalty:home:1", "candidate_id": "whistle:2"}]
     def clip(gid, start, moment, kind="goal", **extra):
         return {"goal_id": gid, "kind": kind, "start_s": start, "moment_s": moment,
                 "end_s": start + 10, "speed": 1, "frames": 300, **extra}
@@ -36,6 +39,16 @@ def game():
                       {"cue": "sfx_goal_card", "t": 35, "goal_id": "home:2"},
                       {"cue": "sfx_final_card", "t": 38}]}
     return sheet, selection, plan, audio
+
+
+def acoustic_proofs(plan, selection, signals):
+    """Stub the measured onset at the bound time for isolated schedule tests."""
+    from audio_mix import build_timeline
+    from whistle_presentation import METHOD, presentation_piece, source_binding
+    timeline = build_timeline(plan, selection=selection, audio_signals=signals)
+    return [{"goal_id": e["goal_id"], "mapped_t": e["confirmation_out"], "onset_t": e["confirmation_out"],
+             "method": METHOD, "piece": source_binding(presentation_piece(timeline, e["goal_id"], e["confirmation_out"]))}
+            for e in timeline if e.get("confirmation_out") is not None]
 
 
 def test_props_writer_credits_sheet_players_and_cue_times(tmp_path):
@@ -309,17 +322,23 @@ def test_short_rails_are_omitted_instead_of_flashing_over_other_plays(tmp_path):
     props = rg.write_props(tmp_path, sheet, selection, plan, audio, {})
     cards = [e for e in props["events"] if e["kind"] in ("goal", "penalty")]
     assert not any(c["startFrame"] in (270, 285) for c in cards)
-    assert sum("insufficient readable time" in f for f in props["flags"]) == 2
+    assert sum("insufficient readable time" in f for f in props["flags"]) == 1
+    assert sum("cue is outside its source play" in f for f in props["flags"]) == 1
 
 
 def test_cli_runs_alpha_renderer_then_overlay_with_audio_copy(tmp_path, monkeypatch, freeze_sheet):
     import recap_graphics as rg
     sheet, selection, plan, audio = game()
+    next(c for c in audio["cues"] if c["cue"] == "sfx_penalty_card")["t"] = 25
+    signals = {"whistles": [{"t": 15}, {"t": 125}, {"t": 35}]}
+    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
     for name, data in [("game_sheet.json", sheet), ("selection.json", selection),
                        ("recap_assembly.json", plan), ("recap_audio.json", audio)]:
         (tmp_path / name).write_text(json.dumps(data))
     calls, published = [], []
     freeze_sheet(sheet)
+    (tmp_path / "coverage.json").write_text(json.dumps({"periods": selection["periods"]}))
+    (tmp_path / "audio_signals.json").write_text(json.dumps({"whistles": [{"t": 15}, {"t": 125}, {"t": 35}]}))
     workspace = tmp_path.parent / (tmp_path.name + "-local-workspace")
     def run(argv, **kwargs):
         calls.append(argv)
@@ -364,11 +383,16 @@ def test_cli_render_failure_does_not_publish_success(tmp_path, monkeypatch, free
     system_temp = tmp_path.parent / (tmp_path.name + "-system-temp")
     monkeypatch.setattr(rg.tempfile, "gettempdir", lambda: str(system_temp))
     sheet, selection, plan, audio = game()
+    next(c for c in audio["cues"] if c["cue"] == "sfx_penalty_card")["t"] = 25
+    signals = {"whistles": [{"t": 15}, {"t": 125}, {"t": 35}]}
+    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
     for name, data in [("game_sheet.json", sheet), ("selection.json", selection),
                        ("recap_assembly.json", plan), ("recap_audio.json", audio)]:
         (tmp_path / name).write_text(json.dumps(data))
     (tmp_path / rg.PROPS_FILE).write_text('{"previous": true}\n')
     freeze_sheet(sheet)
+    (tmp_path / "coverage.json").write_text(json.dumps({"periods": selection["periods"]}))
+    (tmp_path / "audio_signals.json").write_text(json.dumps({"whistles": [{"t": 15}, {"t": 125}, {"t": 35}]}))
     def run(argv, **kwargs):
         if argv[0] == "ffprobe":
             return SimpleNamespace(returncode=0, stdout=json.dumps({"streams": [
@@ -651,15 +675,15 @@ def test_kit_without_a_line_is_rejected_and_flagged(tmp_path):
     assert "home: kit 'red' needs #RRGGBB fill and line; using team colors" in props["flags"]
 
 
-def test_goal_without_confirmation_counts_from_its_moment(tmp_path):
-    # Spec 003, goal and decision states, rule 4: no announcement, but keep the verified score.
+def test_goal_without_confirmation_holds_score_through_its_replay(tmp_path):
+    # The whistle gates the score as well as the event bar and card.
     import recap_graphics as rg
     sheet, selection, plan, audio = game()
     audio["cues"] = [c for c in audio["cues"] if c.get("goal_id") != "home:1"]
     props = rg.write_props(tmp_path, sheet, selection, plan, audio, {})
     bugs = [(b["startFrame"], b["durationFrames"], b["data"]["score"])
             for b in props["events"] if b["kind"] == "scorebug"]
-    assert bugs[:2] == [(0, 150, [0, 0]), (150, 150, [1, 0])]
+    assert bugs[:2] == [(0, 300, [0, 0]), (300, 300, [0, 0])]
 
 
 def test_best_play_replay_gets_a_replay_pane(tmp_path):

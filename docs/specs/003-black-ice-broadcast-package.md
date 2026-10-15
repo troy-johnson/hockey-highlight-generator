@@ -1,5 +1,68 @@
 # Black Ice: broadcast graphics package
 
+## Approved production design (hhg-3r5.106)
+
+The approved v21 adapters define the Ice Pak regional design. The v22 `final.tables` defines the FINAL values and row order.
+This section replaces conflicting review-pass rules below. This work implements the approved design; it does not start another design round.
+Black Ice remains the package name. Do not add a Black Ice channel mark or watermark.
+
+- Use a stacked scorebug with two team rows and one period cell. Place the event bar below both rows.
+- Show the full-width, light REPLAY tab below the scorebug when no event bar occupies that position.
+- Use matching event cards with a crest, event label, player, detail, and separate value cell.
+- Use the approved medium team glow and cubic ease-in-out motion for entry, hold changes, and exit.
+- Use dark skated-pond transitions. Keep the smaller crest inside the pane. Do not add coloured edge glow.
+- Centre the opening matchup rail. Put the date above the two team cards and their VS cell.
+- Stack both teams in the FINAL result plate. Lift that plate before revealing the two statistics tables.
+- Keep G, A, PTS, and PIM on the shared grid, including recorded zero PIM. Keep unknown goalie figures unavailable.
+
+### Frozen data and timing
+
+Names, numbers, scores, dates, and statistics come only from `game_data.json` (ADR-0004).
+Graphics must not read live Rosters or recompute frozen statistics. Keep the snapshot row order, including equal-stat rows.
+The approved v22 validation requires Kenyon Ross at 15 PIM: a major (5) plus a game misconduct (10).
+This is a validation value, not a production constant.
+
+Periods come from `coverage.json`, not a cached Selection period list. Keep approved Selection choices, cuts, and Replay frames unchanged.
+Missing coverage stops graphics. A new snapshot or coverage file invalidates the graphics fingerprint.
+
+The user decided on 2026-10-15 that **score changes, event bars, and event cards must all wait for the referee whistle**.
+Bind the whistle to the kept event. Map its source time through the existing cut and speed.
+If only a retained Replay contains the whistle, use that Replay's seek and speed for the handoff.
+Use the first output frame at or after the whistle, never the nearest frame before it.
+The flow moment has 12 Hz precision; a bound whistle may precede that estimate by one analysis sample.
+Never use that tolerance to move the announcement before the actual whistle.
+The mix checks the bound whistle in kept-camera audio. It records an onset proof in `recap_audio.json`.
+This presentation check does not change Detection, Selection, or cuts. Missing acoustic confirmation omits the announcement.
+Graphics rejects an onset proof that no longer matches the source whistle.
+The proof identifies the exact source file, seek, speed, camera, and output piece.
+Search any retained Replay in source time, not by extending a window across an unrelated source cut.
+An older mix without this proof needs a mix rerun. It cannot restore an earlier merged-camera announcement.
+
+The event bar enters at the whistle frame. The matching card starts its entry six frames later.
+Keep score and period animation origins across adjacent clips, including a live-to-Replay handoff.
+When whistle timing is missing, omit the announcement and hold the old score through that goal's Replay.
+The next chronological play can include the recorded goal. FINAL always uses the frozen score.
+Reject stale mix cues that precede the bound whistle. Do not repair them with a fixed game-specific delay.
+
+### Opening and game sound
+
+Use the configured approved v12 opening video with its mastered sound. Keep its 148 frames and nine-frame dissolve.
+The asset remains outside the repository. Configuration supplies its path; package source must not contain a machine-specific path.
+With a pre-rendered opening, the normal mix defaults to `audio.mode: game_sound`.
+Use the same source seeks and speed as the approved footage. Lower Replay sound by 8 dB and fade cut edges over 15 ms.
+Normalize rink sound to -20 LUFS before adding the mastered opening sound. Apply the output peak limiter.
+Continue the last play's sound under FINAL and fade it over the final three seconds.
+Do not add a synthetic Bed, horn, or graphic cue in game-sound mode. PA music muting still applies.
+Keep `audio.mode: broadcast` available for the existing Cue Library mix and both Perspectives.
+Detection audio weighting remains zero. Graphics sound does not change Detection.
+
+### Text and complete statistics
+
+Fit the complete text inside each cell. Never truncate a surname or use an ellipsis.
+FINAL keeps all frozen rows. Use pages of at most ten skaters per team when necessary.
+Each page needs at least 150 frames. Reject a shorter closing section instead of dropping rows.
+Validate long names, both Perspectives, normal playback, fractional whistle frames, sound, and every approved FINAL value.
+
 ## Identity
 
 Black Ice is the Ice Pak package only. A generic package for other teams is a separate, later design.
@@ -176,8 +239,8 @@ A whistle confirms presentation timing only; it does not establish that a goal o
 
 1. Bind a goal to a verified sheet record or a source-bound human review.
 2. Use a matched post-goal whistle to start the GOAL card and sound.
-3. When the whistle is unavailable, use a verified motion decrease only if the timing method passes review.
-4. If neither method is reliable, omit the announcement and flag it. Keep the verified score.
+3. When the whistle is unavailable, omit the announcement and flag it.
+4. Hold the old score through that goal's Replay. Keep the frozen goal in FINAL and later chronological play.
 
 Use a score ledger for counted, overturned, and corrected goals.
 An explicit correction can reduce a score. Replay footage cannot change the ledger.

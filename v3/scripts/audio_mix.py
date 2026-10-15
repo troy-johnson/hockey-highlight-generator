@@ -98,9 +98,14 @@ def build_timeline(plan: dict, *, selection: dict | None = None,
         e["out_start"] = out
         e["out_dur"] = out_dur
         e["moment_out"] = out + (float(entry.get("moment_s", entry["start_s"])) - float(entry["start_s"])) / speed
-        if entry.get("kind") == "goal" and selection is not None:
-            goal = next((g for g in selection.get("goals", []) if g["id"] == entry["goal_id"]), {})
-            candidate_id = (goal.get("chosen") or {}).get("candidate_id", "")
+        timed_penalty = entry.get("kind") == "play" and entry.get("play_kind") == "penalty"
+        if (entry.get("kind") == "goal" or timed_penalty) and selection is not None:
+            if timed_penalty:
+                selected_event = next((g for g in selection.get("plays", []) if g["id"] == entry["goal_id"]), {})
+                candidate_id = selected_event.get("candidate_id", "")
+            else:
+                selected_event = next((g for g in selection.get("goals", []) if g["id"] == entry["goal_id"]), {})
+                candidate_id = (selected_event.get("chosen") or {}).get("candidate_id", "")
             whistles = (audio_signals or {}).get("whistles", [])
             confirmation = None
             if candidate_id.startswith("whistle:"):
@@ -110,15 +115,27 @@ def build_timeline(plan: dict, *, selection: dict | None = None,
                         confirmation = float(whistles[index]["t"])
                 except (ValueError, IndexError, KeyError, TypeError):
                     pass
+            if timed_penalty and confirmation is None and selected_event.get("whistle_t") is not None:
+                # A reviewed penalty still binds to a measured whistle, not a guessed delay.
+                confirmation = next((float(w["t"]) for w in whistles
+                                     if abs(float(w["t"]) - float(selected_event["whistle_t"])) < .001), None)
             moment = float(entry["moment_s"])
             valid = (confirmation is not None and math.isfinite(confirmation)
-                     and moment <= confirmation <= moment + 3.0 + .5 / 12 + .001
-                     and entry["start_s"] <= confirmation <= entry["end_s"] + .5 / 12 + .001)
-            if valid and (confirmation - entry["start_s"]) / speed >= out_dur:
-                following = sequence[entry_index + 1] if entry_index + 1 < len(sequence) else {}
-                valid = (following.get("goal_id") == entry["goal_id"]
-                         and following.get("kind") not in ("goal", "play"))
-            e["confirmation_out"] = out + (confirmation - entry["start_s"]) / speed if valid else None
+                     and moment - 1 / 12 - .001 <= confirmation <= moment + 3.0 + .5 / 12 + .001)
+            e["confirmation_out"] = None
+            if valid:
+                # A whistle omitted by the live cut can occur later in its own Replay.
+                # Map through that piece's actual source seek and speed, not the expired live seek.
+                cursor = out
+                for piece in sequence[entry_index:]:
+                    if piece.get("goal_id") != entry["goal_id"]:
+                        break
+                    piece_speed = float(piece.get("speed") or 1)
+                    source_end = min(piece["end_s"], piece["start_s"] + piece["frames"] / FPS * piece_speed)
+                    if piece["start_s"] <= confirmation < source_end:
+                        e["confirmation_out"] = cursor + (confirmation - piece["start_s"]) / piece_speed
+                        break
+                    cursor += piece["frames"] / FPS
         parts, tl_pos, out_pos = [], float(entry["start_s"]), out
         for p in entry.get("parts") or []:
             q = dict(p)
@@ -208,8 +225,10 @@ def plan_cues(entries: list[dict], perspective: str = "neutral", focus_side: str
         elif e.get("kind") == "play":
             pk = e.get("play_kind")
             if pk in penalty_kinds:
-                add("sting_penalty", e["out_start"], goal_id=e["goal_id"])
-                add("sfx_penalty_card", e["out_start"], goal_id=e["goal_id"])
+                confirmation = e.get("confirmation_out", e["out_start"])
+                if confirmation is not None:
+                    add("sting_penalty", confirmation, goal_id=e["goal_id"])
+                    add("sfx_penalty_card", confirmation, goal_id=e["goal_id"])
             if pk in fight_kinds:
                 add("sting_fight", e["out_start"], goal_id=e["goal_id"])
             if e["goal_id"] in comic_calls:
@@ -606,6 +625,50 @@ def _entry_audio(entry: dict, windows: list[tuple[float, float]]) -> np.ndarray:
     return buf
 
 
+def game_sound_entry(entry: dict, windows: list[tuple[float, float]]) -> np.ndarray:
+    """Keep the source cuts and speed. Lower Replay sound and fade each cut."""
+    buf = fit_to_length(_entry_audio(entry, windows), round(entry["out_dur"] * SR))
+    if entry["kind"] not in ("goal", "play", "cold_open", "stinger", "final"):
+        buf = buf * 10 ** (-8 / 20)
+    return _edge_fade(buf, ms=15)
+
+
+def closing_game_sound(closing: dict, previous: dict | None, spans: list[dict]) -> np.ndarray:
+    """Continue the last source sound under FINAL and fade its final three seconds."""
+    n = round(closing["out_dur"] * SR)
+    if not previous or not previous.get("parts"):
+        return np.zeros((n, 2), dtype=np.float32)
+    tail = dict(previous, out_dur=closing["out_dur"])
+    last = previous["parts"][-1]
+    start = previous["start_s"] + sum(p["duration_s"] for p in previous["parts"])
+    duration = closing["out_dur"] * float(previous.get("speed") or 1)
+    tail.update(start_s=start, end_s=start + duration,
+                parts=[dict(last, seek_s=last["seek_s"] + last["duration_s"], duration_s=duration, tl_start=start)])
+    buf = game_sound_entry(tail, mute_windows(tail, spans))
+    fade = min(len(buf), 3 * SR)
+    if fade:
+        buf[-fade:] *= np.linspace(1, 0, fade, dtype=np.float32)[:, None]
+    return buf
+
+
+def normalize_game_sound(buf: np.ndarray) -> np.ndarray:
+    """Set rink sound to -20 LUFS before adding the mastered opening sound."""
+    with tempfile.TemporaryDirectory(prefix="hockey-game-sound-") as scratch:
+        raw = Path(scratch) / "game.f32"
+        raw.write_bytes(buf.tobytes())
+        measured = _measure_loudness(raw, raw_input=True, tp=-2.0, target_i=-20.0)
+        if not math.isfinite(measured.get("input_i", -math.inf)):
+            return buf
+        af = ("loudnorm=I=-20:TP=-2:LRA=11"
+              f":measured_i={measured['input_i']}:measured_tp={measured['input_tp']}"
+              f":measured_lra={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
+              f":offset={measured['target_offset']}:linear=true")
+        proc = subprocess.run(["ffmpeg", "-v", "error", "-f", "f32le", "-ar", str(SR), "-ac", "2",
+                               "-i", str(raw), "-af", af, "-ar", str(SR), "-ac", "2", "-f", "f32le", "-"],
+                              capture_output=True, check=True)
+        return fit_to_length(np.frombuffer(proc.stdout, dtype=np.float32).reshape(-1, 2).copy(), len(buf))
+
+
 def _add_bed(master: np.ndarray, segments: list[dict], bed_bufs: dict, bed_gain_db: float,
              duck: np.ndarray) -> None:
     n = len(master)
@@ -628,12 +691,12 @@ def _add_bed(master: np.ndarray, segments: list[dict], bed_bufs: dict, bed_gain_
         master[s0:s1] += (_tile(buf, s1 - s0) * gain[:, None]).astype(np.float32)
 
 
-def _measure_loudness(path: Path, raw_input: bool, tp: float = TARGET_TP) -> dict:
+def _measure_loudness(path: Path, raw_input: bool, tp: float = TARGET_TP, target_i: float = TARGET_I) -> dict:
     argv = ["ffmpeg", "-v", "info"]
     if raw_input:
         argv += ["-f", "f32le", "-ar", str(SR), "-ac", "2"]
     argv += ["-i", str(path),
-             "-af", f"loudnorm=I={TARGET_I}:TP={tp}:LRA={TARGET_LRA}:print_format=json",
+             "-af", f"loudnorm=I={target_i}:TP={tp}:LRA={TARGET_LRA}:print_format=json",
              "-f", "null", "-"]
     proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     return parse_loudnorm_json(proc.stdout)
@@ -710,6 +773,11 @@ def main(argv=None) -> int:
 
     options = json.loads(args.options) if args.options else {}
     audio_opts = dict(options.get("audio") or {})
+    opening = next((e for e in plan.get("opening", []) if e.get("opening_video")), None)
+    mode = audio_opts.get("mode", "game_sound" if opening else "broadcast")
+    if mode not in ("game_sound", "broadcast"):
+        raise ValueError("audio.mode must be game_sound or broadcast")
+    game_sound = mode == "game_sound"
     perspective = options.get("perspective") or "neutral"
     focus_team = options.get("focus_team")
     comic_calls = list(options.get("comic_calls") or [])
@@ -724,15 +792,24 @@ def main(argv=None) -> int:
     selection = _load_json(root / "selection.json") or {}
     from recap_assembly import load_play_reviews
     selection = load_play_reviews(root, selection)
+    coverage = _load_json(root / "coverage.json")
+    if coverage is not None:
+        selection = dict(selection, periods=coverage.get("periods") or [])
     if not selection.get("periods"):
         flag("selection.json has no periods; the Bed runs as one segment")
-    sheet = _load_json(root / "game_sheet.json") or {}
+    if (root / "game_data.json").exists():
+        from game_data import load_graphics_inputs
+        sheet, frozen = load_graphics_inputs(root, options)
+        focus_team = frozen.get("focus_team")
+        focus_team = (frozen.get("teams", {}).get(focus_team) or {}).get("name", focus_team)
+    else:
+        sheet = _load_json(root / "game_sheet.json") or {}
     if not sheet:
         flag("game_sheet.json is missing; close kind and power-play stings follow the plan clips only")
 
     manifest_path = audio_opts.get("manifest") or str(DEFAULT_MANIFEST)
-    manifest, man_flags = load_manifest(manifest_path)
-    placeholder_mode = manifest is None
+    manifest, man_flags = (None, []) if game_sound else load_manifest(manifest_path)
+    placeholder_mode = manifest is None and not game_sound
     if placeholder_mode:
         flag(f"placeholder cue audio: no Cue Library manifest at {manifest_path}; "
              "synthesized cues and bed")
@@ -756,7 +833,7 @@ def main(argv=None) -> int:
     duration_s = float(plan.get("duration_s") or sum(e["frames"] for e in tl) / FPS)
     n = int(round(duration_s * SR))
 
-    beds = manifest["beds"] if manifest else []
+    beds = manifest["beds"] if manifest and not game_sound else []
     if manifest is not None and not beds:
         flag("the Cue Library manifest has no usable Beds; synthesized placeholder Bed")
     rotation_key = _rotation_key(plan, sheet)
@@ -814,7 +891,11 @@ def main(argv=None) -> int:
     for i, e in enumerate(tl):
         windows = mute_windows(e, spans)
         try:
-            buf = _entry_audio(e, windows)
+            if game_sound and e["kind"] == "final":
+                previous = next((piece for piece in reversed(tl[:i]) if piece.get("parts")), None)
+                buf = closing_game_sound(e, previous, spans)
+            else:
+                buf = game_sound_entry(e, windows) if game_sound else _entry_audio(e, windows)
         except RuntimeError as exc:
             print(f"[ERROR] mix: rink audio: {exc}")
             return 1
@@ -822,12 +903,30 @@ def main(argv=None) -> int:
         _place(master, fit_to_length(buf, int(round(e["out_dur"] * SR))), e["out_start"])
         print(f"[mix] rink {i + 1}/{len(tl)} decoded", flush=True)
 
+    from whistle_presentation import confirm_presentations
+    presentation_whistles = confirm_presentations(tl, master, SR)
+    for record in presentation_whistles:
+        if record["onset_t"] is None:
+            flag(f"{record['goal_id']}: whistle not confirmed in kept audio; announcement omitted")
+    cues = plan_cues(tl, perspective=perspective, focus_side=focus_side, duration_s=duration_s,
+                     pp_goals=pp_goals, comic_calls=comic_calls, goal_counts=_sheet_goal_counts(sheet),
+                     period_wipes=period_wipe_times(bed_segments, options), cue_durations=cue_durations or None)
     duck = duck_envelope(n, SR, [c for c in cues if not c["cue"].startswith("sfx_")])
-    _add_bed(master, bed_segments, bed_bufs, bed_gain_db, duck)
+    if game_sound:
+        master = normalize_game_sound(master)
+        if opening:
+            video = opening["opening_video"]
+            sound = decode_audio(video["path"], 0, video["frames"] / FPS)
+            opening_entry = next(e for e in tl if e["kind"] == "stinger")
+            _place(master, sound, opening_entry["out_start"])
+        else:
+            flag("game-sound mode has no mastered opening sound")
+    else:
+        _add_bed(master, bed_segments, bed_bufs, bed_gain_db, duck)
 
     manifest_cues = {c["id"]: c for c in (manifest or {}).get("cues", [])}
     skipped_cues: set[str] = set()
-    for c in cues:
+    for c in ([] if game_sound else cues):
         mc = manifest_cues.get(c["cue"])
         if manifest is not None and mc is None:
             if c["cue"] not in skipped_cues:
@@ -868,6 +967,8 @@ def main(argv=None) -> int:
               # level=false: alimiter's default auto-level adds 1/limit of make-up
               # gain (+1.4 dB here), which pushes peaks back over the ceiling.
               f"alimiter=limit={LIMITER_CEILING}:level=false")
+        if game_sound:
+            af = f"alimiter=limit={LIMITER_CEILING}:level=false"
         out_i = out_tp = None
         for attempt in range(3):
             argv = ["ffmpeg", "-y", "-v", "error", "-i", str(video_in),
@@ -902,18 +1003,19 @@ def main(argv=None) -> int:
                 out_tp = out_tp if out_tp is not None else final.get("input_tp")
                 break
             out_i, out_tp = final["input_i"], final["input_tp"]
-            if out_tp <= TARGET_TP + 0.02 and out_i <= TARGET_I + 0.5:
+            if out_tp <= TARGET_TP + 0.02 and (game_sound or out_i <= TARGET_I + 0.5):
                 break
             # AAC encoding overshoots the true-peak ceiling by 0.1-0.3 dB on peaky
             # cues; corrected re-encodes from the raw mix bring the file under it.
             # Never chase the ceiling deeper than -1.5 LU below the loudness target.
-            gain_db = min((TARGET_TP - 0.3) - out_tp, (TARGET_I - 0.2) - out_i)
-            if gain_db >= -0.01 or out_i <= TARGET_I - 1.5:
+            gain_db = ((TARGET_TP - 0.3) - out_tp if game_sound else
+                       min((TARGET_TP - 0.3) - out_tp, (TARGET_I - 0.2) - out_i))
+            if gain_db >= -0.01 or (not game_sound and out_i <= TARGET_I - 1.5):
                 break
             print(f"[mix] re-encoding with {gain_db:.2f} dB correction "
                   f"(encoded file measured {out_i:.1f} LUFS / {out_tp:.1f} dBTP)", flush=True)
             af += f",volume={gain_db:.2f}dB"
-        if out_i is not None and (out_i > TARGET_I + 0.5
+        if out_i is not None and ((not game_sound and out_i > TARGET_I + 0.5)
                                   or (out_tp is not None and out_tp > TARGET_TP + 0.02)):
             tp_txt = f"{out_tp:.1f}" if out_tp is not None else "?"
             flag(f"output loudness {out_i:.1f} LUFS / {tp_txt} dBTP is off target "
@@ -922,10 +1024,12 @@ def main(argv=None) -> int:
 
     report = {"schema_version": 1, "output": out_name, "video": plan["output"],
               "duration_s": round(duration_s, 3), "perspective": perspective,
-              "focus_side": focus_side, "placeholder": placeholder_mode,
+              "focus_side": focus_side, "placeholder": placeholder_mode, "mode": mode,
+              "opening_sound": opening["opening_video"] if opening and game_sound else None,
               "manifest": manifest_path if manifest is not None else None,
               "bed_gain_db": bed_gain_db, "bed": bed_segments,
               "cues": cues, "muted_windows": muted,
+              "presentation_whistles": presentation_whistles,
               "loudnorm": {"measured": measured, "output_i": out_i, "output_tp": out_tp},
               "flags": flags}
     (root / REPORT_FILE).write_text(json.dumps(report, indent=2) + "\n")

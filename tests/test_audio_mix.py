@@ -74,16 +74,15 @@ def test_goal_card_waits_for_matched_whistle_after_motion_peak():
     assert not any(c["cue"] == "sfx_goal_card" for c in am.plan_cues(tl, duration_s=10))
 
 
-def test_goal_confirmation_at_rounded_live_cut_edge_starts_on_replay():
+def test_goal_confirmation_omitted_from_both_live_and_replay_is_not_announced():
     entry = _entry("away:1", start=100, end=109, moment=106, speed=1)
     replay = _entry("away:1", kind="tight", start=104.25, end=108.25,
                     moment=106, speed=.5)
     selection = {"goals": [{"id": "away:1", "chosen": {"candidate_id": "whistle:0"}}]}
     signals = {"whistles": [{"t": 109.02}]}
     tl = am.build_timeline(_plan([entry], [replay]), selection=selection, audio_signals=signals)
-    assert tl[0]["confirmation_out"] == pytest.approx(9.02)
-    assert next(c for c in am.plan_cues(tl, duration_s=17)
-                if c["cue"] == "sfx_goal_card")["t"] == pytest.approx(9.02)
+    assert tl[0]["confirmation_out"] is None
+    assert not any(c["cue"] == "sfx_goal_card" for c in am.plan_cues(tl, duration_s=17))
 
 
 def test_goal_confirmation_past_cut_without_replay_does_not_announce_over_next_play():
@@ -404,7 +403,8 @@ def test_mix_fingerprint_hashes_its_inputs(tmp_path):
         (tmp_path / name).write_text("{}" if not name.endswith(".mp4") else "x")
     fp = next(s for s in rr.STAGES if s.name == "mix").fingerprint(ctx)
     assert set(fp["inputs"]) == {"recap_assembly.json", "music_spans.json", "selection.json",
-                                 "game_sheet.json", "recap.mp4", "audio_signals.json", "play_review.json"}
+                                 "game_sheet.json", "recap.mp4", "audio_signals.json", "play_review.json",
+                                 "game_data.json", "coverage.json"}
     assert fp["options"] == rr.mix_options(ctx)
     assert "scripts" in fp
 

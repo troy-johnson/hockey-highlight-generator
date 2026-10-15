@@ -88,8 +88,9 @@ def test_short_score_changes_at_goal_moment_and_replay_keeps_new_score():
     entry = {"kind": "goal", "start_s": 10., "moment_s": 13., "speed": 1.,
              "score_before": [2, 0], "score": [2, 1]}
     assert score_at(entry, 2.9) == [2, 0]
-    assert score_at(entry, 3.) == [2, 1]
-    assert score_at(dict(entry, kind="replay", speed=.5), 0.) == [2, 1]
+    assert score_at(entry, 3.) == [2, 0]
+    assert score_at(dict(entry, confirmation_out=3.), 3.) == [2, 1]
+    assert score_at(dict(entry, kind="replay", speed=.5, confirmation_out=-1.), 0.) == [2, 1]
 
 
 def test_short_replay_uses_native_gate_and_optional_interpolator():
