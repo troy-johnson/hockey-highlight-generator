@@ -298,10 +298,15 @@ def load_play_reviews(root: Path, selection: dict) -> dict:
         source = review.get("source")
         expected = {"candidate_id": candidate.get("candidate_id"),
                     "primary_cam": candidate.get("camera"), "detection_s": candidate.get("t")}
+        def same(a, b):
+            # Selection stores chosen.detection_s rounded to ms; best_candidate.t is not.
+            if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                return round(a, 3) == round(b, 3)
+            return a == b
         if (not isinstance(source, dict) or any(v is None for v in expected.values())
-                or any(source.get(k) != v for k, v in expected.items())):
+                or not all(same(source.get(k), v) for k, v in expected.items())):
             raise ValueError(f"{goal_id}: stale goal review; candidate changed")
-        if goal.get("chosen") and any(goal["chosen"].get(k) != v for k, v in expected.items()):
+        if goal.get("chosen") and not all(same(goal["chosen"].get(k), v) for k, v in expected.items()):
             raise ValueError(f"{goal_id}: stale goal review; selected source changed")
         moment = float(source["detection_s"])
         goal["chosen"] = dict(source, start_s=moment - 6, end_s=moment + 4)

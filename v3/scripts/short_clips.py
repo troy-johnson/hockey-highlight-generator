@@ -187,13 +187,19 @@ def plan_short(selection: dict, layouts: dict, *, rois=None, sheet=None, bar_s=2
                          if g.get("elapsed_s") is not None else
                          (g.get("chosen") or {}).get("detection_s", math.inf),
                          int(g["id"].split(":")[-1])))
-        prior = ordered[:next((i + 1 for i, g in enumerate(ordered) if g["id"] == item["id"]), 0)]
-        for goal in goals:
-            expected = (goal.get("chosen") or {}).get("detection_s", (goal.get("window") or {}).get("expected"))
-            if (item["kind"] == "goal" and goal in prior) or (item["kind"] != "goal" and expected is not None and expected <= moment):
-                side = goal["id"].split(":")[0]
-                if side in ("home", "away"):
-                    clip["score"][side == "away"] += 1
+        if item["kind"] == "goal":
+            prior = ordered[:next((i + 1 for i, g in enumerate(ordered) if g["id"] == item["id"]), 0)]
+        else:
+            # Every goal in sheet order up to the last one before this moment, so a goal with
+            # no source moment still counts once a later goal has (the score never goes down).
+            def expected(goal):
+                return (goal.get("chosen") or {}).get("detection_s", (goal.get("window") or {}).get("expected"))
+            prior = ordered[:max((i + 1 for i, g in enumerate(ordered)
+                                  if expected(g) is not None and expected(g) <= moment), default=0)]
+        for goal in prior:
+            side = goal["id"].split(":")[0]
+            if side in ("home", "away"):
+                clip["score"][side == "away"] += 1
         clip["score_before"] = list(clip["score"])
         if item["kind"] == "goal":
             clip["score_before"][item["id"].startswith("away:")] -= 1
@@ -388,12 +394,17 @@ def render_short(plan: dict, target: Path) -> None:
                     probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0",
                         "-show_entries", "stream=width,height", "-of", "json", file]))["streams"][0]
                     w, h = probe["width"], probe["height"]
+                    # Each part fills its own share of the entry. A fractional seek can make
+                    # the fps filter drop one frame, so decode 2 frames more and stop at the share.
+                    last_part = index == len(entry["parts"]) - 1
+                    part_end = entry["frames"] if last_part else min(entry["frames"],
+                                                                   count + round(duration / speed * FPS))
                     decoder = subprocess.Popen(["ffmpeg", "-v", "error", "-ss", str(seek),
-                        "-i", file, "-t", str(duration), "-an", "-vf",
+                        "-i", file, "-t", str(duration + 2 * speed / FPS), "-an", "-vf",
                         f"fps={FPS / speed}", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"], stdout=subprocess.PIPE)
                     assert decoder.stdout is not None
                     try:
-                        while count < entry["frames"]:
+                        while count < part_end:
                             raw = decoder.stdout.read(w * h * 3)
                             if len(raw) != w * h * 3:
                                 break

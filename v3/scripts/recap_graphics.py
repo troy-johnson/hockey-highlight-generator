@@ -301,16 +301,22 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
         if e["kind"] == "goal":
             confirmation = next((c["t"] for c in audio.get("cues", [])
                                  if c["cue"] == "sfx_goal_card" and c.get("goal_id") == gid), None)
-            change = end if confirmation is None else max(start, min(end, round(confirmation * fps)))
+            # No confirmation: no announcement, but the verified goal still counts from its
+            # moment in the footage (spec 003, goal and decision states, rule 4).
+            when = confirmation if confirmation is not None else e.get("moment_out")
+            change = end if when is None else max(start, min(end, round(when * fps)))
             bug(start, change, score_before(gid))
             bug(change, end, score_before(gid, True))
-        elif gid in goal_order:
-            bug(start, end, score_before(gid, True))
-            events.append({"kind": "replay", "startFrame": start, "durationFrames": end - start, "data": {}})
         else:
-            score = [sum(g.startswith(s + ":") and moments.get(g) is not None
-                          and moments[g] <= moment for g in goal_order) for s in ("home", "away")]
+            if gid in goal_order:
+                score = score_before(gid, True)
+            else:
+                score = [sum(g.startswith(s + ":") and moments.get(g) is not None
+                              and moments[g] <= moment for g in goal_order) for s in ("home", "away")]
             bug(start, end, score)
+            # A replay shot (a goal's, or the best non-goal play's) carries its shot kind, not "play".
+            if e["kind"] != "play":
+                events.append({"kind": "replay", "startFrame": start, "durationFrames": end - start, "data": {}})
     for cue in audio.get("cues") or []:
         if not cue["cue"].startswith("sfx_"):
             continue

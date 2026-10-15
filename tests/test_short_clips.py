@@ -333,3 +333,41 @@ def test_short_cli_writes_compilation_and_three_goal_outputs(tmp_path):
         assert (streams[0]["width"], streams[0]["height"]) == (1080, 1920)
         assert streams[1]["codec_name"] == "aac"
     assert 30 <= plan["duration_s"] <= 60
+
+
+def test_non_goal_play_keeps_uncovered_goal_counted_before_it():
+    from short_clips import plan_short
+    goals = [{"id": "home:1", "period": 1, "elapsed_s": 2., "interest": .1, "chosen": None}]
+    goals += [{"id": f"away:{i}", "period": 1, "elapsed_s": i*10., "interest": .8,
+               "chosen": {"primary_cam": "cam1", "detection_s": i*20.}} for i in range(1, 4)]
+    selection = {"goals": goals, "plays": [{"id": "p_save", "kind": "save", "primary_cam": "cam1",
+                                            "score": 1., "detection_s": 70.}]}
+    layouts = {"cam1": [{"start": 0., "end": 100., "seek": 0., "files": [("synthetic.mp4", 100.)]}]}
+    plan = plan_short(selection, layouts)
+    scores = {c["goal_id"]: c["score"] for c in plan["clips"]}
+    assert scores["away:3"] == [1, 3]
+    assert scores["p_save"] == [1, 3]   # was [0, 3]: the score went down
+
+
+def test_fractional_seek_still_fills_every_frame(tmp_path, monkeypatch):
+    # ffmpeg -ss 0.011 -t 6 with fps=30 gives 179 frames, not 180.
+    import subprocess
+    import json
+    from short_clips import render_short
+    import recap_assembly
+    monkeypatch.setattr(recap_assembly, "rife_ready", lambda: False)
+    source = tmp_path / "source.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    "testsrc2=s=320x180:r=30:d=8", "-c:v", "libx264", "-g", "30", "-y", str(source)], check=True)
+    entry = {"kind": "goal", "camera": "cam1", "goal_id": "away:1", "frames": 180,
+             "speed": 1., "start_s": .011, "end_s": 6.011, "caption": None, "score": [0, 1],
+             "parts": [{"file": str(source), "seek_s": .011, "duration_s": 6.}],
+             "framing": {"layout": "4:5", "tracking": [[0., .5, .5]], "fit": 1., "flags": []}}
+    plan = {"opening": [], "clips": [entry], "replays": [], "teams": {"home": "Red", "away": "Blue"},
+            "final": {"kind": "final", "frames": 15, "score": [0, 1], "table": {}, "goalies": {}},
+            "duration_s": 6.5, "flags": []}
+    target = tmp_path / "fractional_Recap_short.mp4"
+    render_short(plan, target)
+    probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams",
+                                               "-of", "json", str(target)]))["streams"][0]
+    assert int(probe["nb_frames"]) == 195

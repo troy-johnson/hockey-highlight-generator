@@ -645,3 +645,26 @@ def test_kit_without_a_line_is_rejected_and_flagged(tmp_path):
     props = rg.write_props(tmp_path, sheet, selection, plan, audio, options)
     assert "kit" not in props["teams"]["home"]
     assert "home: kit 'red' needs #RRGGBB fill and line; using team colors" in props["flags"]
+
+
+def test_goal_without_confirmation_counts_from_its_moment(tmp_path):
+    # Spec 003, goal and decision states, rule 4: no announcement, but keep the verified score.
+    import recap_graphics as rg
+    sheet, selection, plan, audio = game()
+    audio["cues"] = [c for c in audio["cues"] if c.get("goal_id") != "home:1"]
+    props = rg.write_props(tmp_path, sheet, selection, plan, audio, {})
+    bugs = [(b["startFrame"], b["durationFrames"], b["data"]["score"])
+            for b in props["events"] if b["kind"] == "scorebug"]
+    assert bugs[:2] == [(0, 150, [0, 0]), (150, 150, [1, 0])]
+
+
+def test_best_play_replay_gets_a_replay_pane(tmp_path):
+    import recap_graphics as rg
+    sheet, selection, plan, audio = game()
+    play = plan["clips"][1]
+    plan["replays"].append(dict(play, kind="tight", start_s=34, frames=30))
+    plan["duration_s"] = audio["duration_s"] = 41
+    audio["cues"] = [dict(c, t=c["t"] + 1) if c["t"] >= 30 else c for c in audio["cues"]]
+    props = rg.write_props(tmp_path, sheet, selection, plan, audio, {})
+    replays = [(e["startFrame"], e["durationFrames"]) for e in props["events"] if e["kind"] == "replay"]
+    assert (900, 30) in replays

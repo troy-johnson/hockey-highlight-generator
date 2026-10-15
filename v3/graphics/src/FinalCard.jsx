@@ -8,7 +8,7 @@ const cyan = '#7FD3F0';
 const clamp = v => Math.max(0, Math.min(1, v));
 const out = Easing.out(Easing.cubic);
 const inOut = Easing.inOut(Easing.cubic);
-const fmt = v => v == null ? '—' : Number.isFinite(v) && Number.isInteger(v) ? v : Number.isFinite(v) ? Number(v.toFixed(1)) : v;
+const fmt = v => v == null ? '—' : Number.isFinite(v) && Number.isInteger(v) ? v : Number.isFinite(v) ? Number(v.toFixed(2)) : v;  // 2:15 PIM shows 2.25, not 2.3 (spec 003)
 const STATS = [['g', 'G'], ['a', 'A'], ['pts', 'PTS'], ['pim', 'PIM']];
 // Shrink text to fit its width instead of clipping it (about .58 em per character).
 const fit = (text, base, width) => Math.min(base, width / (Math.max(1, String(text ?? '').length) * .58));

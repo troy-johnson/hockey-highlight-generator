@@ -556,3 +556,17 @@ def test_saved_goal_review_restores_confirmed_candidate_without_lowering_thresho
     original["goals"][0]["best_candidate"]["t"] = 2968
     with pytest.raises(ValueError, match="stale goal review"):
         load_play_reviews(tmp_path, original)
+
+
+def test_unchanged_goal_review_accepts_ms_rounded_selected_time(tmp_path):
+    # selection.py stores chosen.detection_s rounded to ms; best_candidate.t is the raw edge time.
+    from recap_assembly import load_play_reviews
+    t = 100 + 1 / 12
+    selection = {"goals": [{"id": "away:2",
+                 "chosen": {"candidate_id": "whistle:55", "primary_cam": "cam2", "detection_s": round(t, 3)},
+                 "best_candidate": {"candidate_id": "whistle:55", "camera": "cam2", "t": t}}]}
+    source = {"candidate_id": "whistle:55", "primary_cam": "cam2", "detection_s": round(t, 3)}
+    (tmp_path / "play_review.json").write_text(json.dumps({"schema_version": 1, "plays": {},
+        "goals": {"away:2": {"status": "keep", "source": source}}}))
+    reviewed = load_play_reviews(tmp_path, selection)
+    assert reviewed["goals"][0]["review_status"] == "keep"

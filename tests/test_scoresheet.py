@@ -314,3 +314,12 @@ def test_a_new_reader_version_reads_the_sheet_again(tmp_path, monkeypatch):
     monkeypatch.setattr(ss, "READER_VERSION", ss.READER_VERSION + 1)
     ss.main(str(tmp_path))
     assert len(reads) == 2
+
+
+def test_final_score_override_fills_an_unreadable_pdf_final_score():
+    # gamesheet_pdf writes "final_score": null when it cannot read the total.
+    sheet = {"goals": {"home": [], "away": []}, "penalties": {"home": [], "away": []},
+             "flags": [], "final_score": None}
+    out = ss.apply_overrides(sheet, {"schema_version": 1, "final_score": {"home": 2, "away": 1}},
+                             check_rows=False)
+    assert out["final_score"] == {"home": 2, "away": 1}

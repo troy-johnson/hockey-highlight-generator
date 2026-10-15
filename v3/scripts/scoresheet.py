@@ -651,7 +651,9 @@ def apply_overrides(sheet: dict, overrides: dict, *, check_rows: bool = True) ->
     for side, value in _side_map(overrides, "final_score").items():
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"final_score.{side}: expected a whole number")
-        out.setdefault("final_score", {})[side] = value
+        if not isinstance(out.get("final_score"), dict):   # a PDF read can have no final score (null)
+            out["final_score"] = {}
+        out["final_score"][side] = value
     dismiss = overrides.get("dismiss_flags", [])
     if not isinstance(dismiss, list) or not all(isinstance(f, str) for f in dismiss):
         raise ValueError("dismiss_flags: expected a list of flag texts")
