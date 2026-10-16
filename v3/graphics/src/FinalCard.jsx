@@ -139,7 +139,7 @@ export const FinalCard = ({data, teams, tokens, duration, vertical}) => {
     <div style={{position: 'absolute', left: 0, right: 0, top: 0, height: 1,
       background: 'rgba(238,243,246,.18)'}}/>
     <RegionalResult data={data} teams={teams} frame={f} lift={lift} vertical={vertical}/>
-    {any && f >= 38 && <div style={{position: 'absolute', top: tableTop, left: 0, width: W,
+    {any > 0 && f >= 38 && <div style={{position: 'absolute', top: tableTop, left: 0, width: W,
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: vertical ? 28 : 24}}>
       {sides.length > 0 && <div style={{display: 'flex', flexDirection: vertical ? 'column' : 'row',
         alignItems: vertical ? 'center' : 'flex-start', gap: vertical ? 28 : 40}}>
