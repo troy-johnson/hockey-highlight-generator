@@ -134,7 +134,7 @@ def test_white_score_flash_uses_dark_ink():
 
 def test_final_sound_continues_last_source_and_fades(monkeypatch):
     seen = []
-    def sound(entry, windows):
+    def sound(entry, windows, notes=None):
         seen.append((entry, windows))
         return np.ones((am.SR * 5, 2), dtype=np.float32)
     monkeypatch.setattr(am, "game_sound_entry", sound)

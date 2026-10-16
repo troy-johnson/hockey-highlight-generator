@@ -220,9 +220,15 @@ The runner fingerprints the video, so a new render of it reruns the assembly.
 The approved v12 opening includes mastered sound. Set the kit's `opening` to that asset, not an older silent render.
 The asset stays outside git. The pipeline does not change the real database or Team Config to select it.
 The normal mix uses `audio.mode: game_sound` when an assembly contains a pre-rendered opening.
-It keeps source seeks and speed, lowers Replay sound by 8 dB, and applies 15 ms cut fades.
+It keeps source seeks and speed and applies 15 ms cut fades.
+By default a Replay has live sound: the live clip's source continues at the clip's speed, so the sound under a Replay follows on from the play.
+FINAL continues from the end of that sound. Sound that runs past the end of a chapter file continues in the Recording's next chapter.
+If no next chapter exists, silence fills the rest and the mix flags it.
+Whistle times map through the sound the mix used. Graphics read `live_replay` from `recap_audio.json`, so a proof stays bound to its mix.
+Set `audio.live_replay: false` to use the slowed Replay sound, lowered by 8 dB.
 It normalizes rink sound to -20 LUFS before adding the opening sound, then limits the output peak.
-PA music muting still applies. This mode adds no synthetic Bed, horn, or graphic sounds.
+PA music muting still applies. This mode adds no synthetic Bed or placeholder sounds.
+When a Cue Library manifest exists, this mode adds the game cues from it (hhg-3r5.110). See `docs/cue-library.md`.
 Set `audio.mode: broadcast` to retain the Cue Library mix. Without a pre-rendered opening, broadcast remains the default.
 
 For an older assembly, explicit `start: stinger` compresses the opening motion into its first 75 frames.

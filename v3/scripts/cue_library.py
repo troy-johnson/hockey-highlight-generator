@@ -19,8 +19,14 @@ CUE_IDS = (
     "game_start", "horn", "close_win", "close_loss", "close_neutral",
     "sting_penalty", "sting_power_play", "sting_fight", "sting_comic_call",
     "sting_neutral", "sfx_goal_card", "sfx_penalty_card", "sfx_period_wipe", "sfx_final_card",
+    # Game cues (hhg-3r5.110): named by role, so a re-created track replaces a file, not code.
+    # Goal songs follow the scoring team; penalty songs follow the penalized team.
+    "song_goal_focus", "song_goal_opponent", "song_penalty_focus", "song_penalty_opponent",
+    "sfx_replay_pane", "sfx_period_cut",
 )
-SOURCES = ("YouTube Audio Library", "Pixabay", "Freesound CC0")
+SOURCES = ("YouTube Audio Library", "Pixabay", "Freesound CC0", "Suno", "Original")
+# Suno grants commercial use only for songs made on a paid plan.
+SUNO_LICENSES = ("Suno Pro", "Suno Premier")
 
 
 def _text(value, field: str) -> str:
@@ -65,12 +71,16 @@ def _provenance(entry: dict, root: Path, audio: Path) -> None:
     proof = entry.get("provenance")
     if not isinstance(proof, dict) or not proof:
         raise ValueError("provenance: source, license proof, hash, and approval are required")
-    url = urlparse(_text(proof.get("url"), "provenance.url"))
-    if url.scheme not in ("https", "http") or not url.netloc:
-        raise ValueError("provenance.url: expected an HTTP source URL")
+    # Original work has no download page; its proof file (script or project) is the source.
+    if entry["source"] != "Original" or proof.get("url") is not None:
+        url = urlparse(_text(proof.get("url"), "provenance.url"))
+        if url.scheme not in ("https", "http") or not url.netloc:
+            raise ValueError("provenance.url: expected an HTTP source URL")
     license_name = _text(proof.get("license"), "provenance.license")
     if entry["source"] == "Freesound CC0" and license_name != "CC0":
         raise ValueError("provenance.license: Freesound requires CC0")
+    if entry["source"] == "Suno" and license_name not in SUNO_LICENSES:
+        raise ValueError(f"provenance.license: Suno requires a paid plan, one of {SUNO_LICENSES}")
     _local_file(root, proof.get("proof"), "provenance.proof")
     _text(proof.get("approved_by"), "provenance.approved_by")
     try:

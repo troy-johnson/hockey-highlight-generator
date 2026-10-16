@@ -401,3 +401,29 @@ def test_real_synthetic_mix_records_rotation_only_after_success_and_flags_histor
             assert history.read_text() == "not JSON"
         else:
             assert not history.exists()
+
+
+def test_suno_cues_need_a_paid_plan_license(tmp_path):
+    """hhg-3r5.110: Suno grants commercial use only for songs made on a paid plan."""
+    song = entry(tmp_path, "song_goal_focus", "cues")
+    song["source"] = "Suno"
+    song["provenance"].update(url="https://suno.com/song/fixture", license="Suno Pro")
+    assert cl.load_manifest(manifest(tmp_path, cues=[song]))["cues"][0]["source"] == "Suno"
+    song["provenance"]["license"] = "Suno Free"
+    with pytest.raises(ValueError, match="paid plan"):
+        cl.load_manifest(manifest(tmp_path, cues=[song]))
+
+
+def test_original_cues_may_use_a_proof_file_instead_of_a_url(tmp_path):
+    pane = entry(tmp_path, "sfx_replay_pane", "cues")
+    pane["source"] = "Original"
+    pane["provenance"].update(license="Original work")
+    del pane["provenance"]["url"]
+    assert cl.load_manifest(manifest(tmp_path, cues=[pane]))["cues"][0]["id"] == "sfx_replay_pane"
+    pane["provenance"]["url"] = "file-not-a-url"
+    with pytest.raises(ValueError, match="provenance.url"):
+        cl.load_manifest(manifest(tmp_path, cues=[pane]))
+    pane["source"] = "Pixabay"
+    del pane["provenance"]["url"]
+    with pytest.raises(ValueError, match="provenance.url"):
+        cl.load_manifest(manifest(tmp_path, cues=[pane]))

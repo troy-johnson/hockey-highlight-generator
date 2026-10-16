@@ -267,8 +267,9 @@ def write_props(root: Path, sheet: dict, selection: dict, plan: dict, audio: dic
     periods = coverage.get("periods", []) if coverage is not None else selection.get("periods") or []
     if coverage is not None and not periods:
         raise ValueError("coverage.json has no periods; confirm coverage before graphics")
+    # Map whistles through the sound the mix used: live Replay sound when its report says so.
     timeline = build_timeline(plan, selection=selection if audio_signals is not None else None,
-                              audio_signals=audio_signals)
+                              audio_signals=audio_signals, live_replay=bool(audio.get("live_replay")))
     audio = copy.deepcopy(audio)
     if audio_signals is not None:
         for cue in audio.get("cues", []):

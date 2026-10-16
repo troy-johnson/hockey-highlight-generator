@@ -70,10 +70,34 @@ _PLACEHOLDER_SPEC = {
     "sfx_penalty_card": (0.25, (740.0,), 0.04),
     "sfx_period_wipe": (0.25, (660.0,), 0.04),
     "sfx_final_card": (0.25, (990.0,), 0.04),
+    # Game cues (hhg-3r5.110). A song runs from its event to the end of the replay block, so
+    # its event sets the length; these placeholder lengths are only for synthesis.
+    "song_goal_focus": (4.0, (261.6, 329.6, 392.0), 1.5),
+    "song_goal_opponent": (4.0, (220.0, 261.6, 329.6), 1.5),
+    "song_penalty_focus": (4.0, (293.7, 349.2), 1.5),
+    "song_penalty_opponent": (4.0, (329.6, 415.3, 493.9), 1.5),
+    "sfx_replay_pane": (0.25, (1320.0,), 0.04),
+    # The period sound on a plain cut; sfx_period_wipe stays the cue of the full period pane.
+    "sfx_period_cut": (0.25, (990.0, 1320.0), 0.04),
 }
 
 CUE_IDS = tuple(_PLACEHOLDER_SPEC)
 PLACEHOLDER_DUR_S = {cue: spec[0] for cue, spec in _PLACEHOLDER_SPEC.items()}
+
+# Game-sound mode cues (hhg-3r5.110): arena music and package sounds over live rink sound,
+# with no Bed. Levels are the cue alone in LUFS, over rink sound set to -20 LUFS; a
+# manifest entry's measured `lufs` sets its gain. Values are the reviewed previews.
+GAME_CUE_LUFS = {
+    "horn": -16.0,
+    "song_goal_focus": -18.0, "song_goal_opponent": -20.0,
+    "song_penalty_focus": -20.0, "song_penalty_opponent": -18.0,
+    "close_win": -18.0, "close_loss": -20.0, "close_neutral": -20.0,
+    "sfx_replay_pane": -20.0, "sfx_period_cut": -22.0, "sfx_period_wipe": -22.0,
+}
+GAME_CUES = frozenset(GAME_CUE_LUFS)
+SONG_FADE_S = 1.0             # a song fades out over its last second, ending on the cut
+PANE_PEAK_S = 8 / FPS         # the replay pane covers the cut on its 8th frame
+LIVE_KINDS = ("goal", "play", "cold_open", "stinger", "final")
 
 
 # ---------------------------------------------------------------------------
@@ -81,14 +105,17 @@ PLACEHOLDER_DUR_S = {cue: spec[0] for cue, spec in _PLACEHOLDER_SPEC.items()}
 # ---------------------------------------------------------------------------
 
 def build_timeline(plan: dict, *, selection: dict | None = None,
-                   audio_signals: dict | None = None) -> list[dict]:
+                   audio_signals: dict | None = None, live_replay: bool = False) -> list[dict]:
     """
     The output cut timeline: plan clips in plan order, each followed by its
     replays, with output positions. `frames / FPS` is the exact piece length,
-    as in recap_assembly.render().
+    as in recap_assembly.render(). With live_replay, Replays carry live sound
+    (live_sound_sequence), and whistle times map through that sound.
     """
     from recap_assembly import recap_sequence
     sequence = recap_sequence(plan)
+    if live_replay:
+        sequence = live_sound_sequence(sequence)
     tl: list[dict] = []
     out = 0.0
     for entry_index, entry in enumerate(sequence):
@@ -150,6 +177,40 @@ def build_timeline(plan: dict, *, selection: dict | None = None,
     return tl
 
 
+def _continued_part(previous: dict, start: float, duration: float) -> dict:
+    """The previous piece's last part, continued from `start` (source s) for `duration`."""
+    last = previous["parts"][-1]
+    offset = start - (previous["start_s"] + sum(p["duration_s"] for p in previous["parts"][:-1]))
+    return dict(last, seek_s=last["seek_s"] + offset, duration_s=duration, tl_start=start, continued=True)
+
+
+def live_sound_sequence(sequence: list[dict]) -> list[dict]:
+    """
+    Live sound for Replays (hhg-3r5.110). Instead of the slowed Replay audio, the live
+    piece's source keeps running at its own speed, so the sound under a Replay follows on
+    from the play. A Replay keeps its kind, frames and picture fields; its sound fields
+    (start_s, end_s, speed, camera, parts) become the continued live source, and
+    `live_sound` marks it. Consecutive Replays of one live piece continue one after another.
+    """
+    out, live, cursor = [], None, 0.0
+    for e in sequence:
+        if e.get("kind") in LIVE_KINDS:
+            live = e if e.get("parts") and e.get("kind") in ("goal", "play") else None
+            if live is not None:
+                cursor = live["start_s"] + sum(p["duration_s"] for p in live["parts"])
+            out.append(e)
+        elif live is not None and e.get("goal_id") == live.get("goal_id"):
+            speed = float(live.get("speed") or 1)
+            duration = float(e["frames"]) / FPS * speed
+            out.append(dict(e, start_s=cursor, end_s=cursor + duration, speed=speed,
+                            camera=live.get("camera"), live_sound=True,
+                            parts=[_continued_part(live, cursor, duration)]))
+            cursor += duration
+        else:
+            out.append(e)
+    return out
+
+
 def mute_windows(entry: dict, spans: list[dict]) -> list[tuple[float, float]]:
     """
     PA-mute windows in entry source time (parts laid end to end, before the
@@ -186,12 +247,14 @@ def plan_cues(entries: list[dict], perspective: str = "neutral", focus_side: str
               duration_s: float = 0.0, pp_goals=(), comic_calls=(),
               penalty_kinds=PENALTY_KINDS, fight_kinds=FIGHT_KINDS,
               goal_counts: tuple[int, int] | None = None, period_wipes=(),
-              cue_durations: dict | None = None) -> list[dict]:
+              cue_durations: dict | None = None, game_cues: bool = False,
+              period_cuts=()) -> list[dict]:
     """
     Cue events on the output timeline. The horn follows the Perspective:
     every goal in Neutral, only the Focus Team's goals in Focus. SFX cues are
     per-graphic hooks for hhg-3r5.34; sfx_score_flap is not derivable from the
-    plan yet and is skipped.
+    plan yet and is skipped. game_cues adds the songs, replay panes and the
+    sfx_period_cut sound at period_cuts (hhg-3r5.110); songs need a Focus Team.
     """
     durs = dict(PLACEHOLDER_DUR_S)
     durs.update(cue_durations or {})
@@ -235,13 +298,90 @@ def plan_cues(entries: list[dict], perspective: str = "neutral", focus_side: str
                 add("sting_comic_call", e["out_start"], goal_id=e["goal_id"])
     for w in period_wipes:
         add("sfx_period_wipe", w)
+    if game_cues:
+        cues.extend(_game_cues(entries, focus_side if perspective == "focus" else None, duration_s,
+                               durs["sfx_replay_pane"]))
+        for t in period_cuts:
+            add("sfx_period_cut", t)
     close_id = _close_cue(perspective, focus_side, goal_counts, entries)
     closing = next((e for e in entries if e.get("kind") == "final"), None)
-    close_t = closing["out_start"] if closing else duration_s - durs.get(close_id, 2.0)
+    close_t = closing["out_start"] if closing else max(0.0, duration_s - durs.get(close_id, 2.0))
     add("sfx_final_card", close_t)
     add(close_id, close_t)
     cues.sort(key=lambda c: (c["t"], 1 if c["cue"].startswith("close_") else 0))
     return cues
+
+
+def _block_end(entries: list[dict], i: int) -> float:
+    """Output end of entry i and the replays that follow it (same goal_id)."""
+    end = entries[i]["out_start"] + entries[i]["out_dur"]
+    for e in entries[i + 1:]:
+        if e.get("goal_id") != entries[i].get("goal_id") or e.get("kind") in LIVE_KINDS:
+            break
+        end = e["out_start"] + e["out_dur"]
+    return end
+
+
+def _game_cues(entries: list[dict], focus_side: str | None, duration_s: float,
+               pane_s: float = PLACEHOLDER_DUR_S["sfx_replay_pane"]) -> list[dict]:
+    """
+    Songs and replay panes. A goal song starts at the goal confirmation, a penalty song at
+    the penalty card, and each runs to the end of its replay block, fading over the last
+    SONG_FADE_S. Goal songs follow the scoring team; penalty songs (ids like
+    "penalty:home:1") follow the penalized team. A pane sound, pane_s long (the library
+    file), starts PANE_PEAK_S early so its peak lands on each replay cut.
+    """
+    cues = []
+    for i, e in enumerate(entries):
+        if focus_side and e.get("kind") == "goal":
+            role, side, t = "goal", goal_side(e), e.get("confirmation_out", e["moment_out"])
+        elif focus_side and e.get("kind") == "play" and e.get("play_kind") == "penalty":
+            role, t = "penalty", e.get("confirmation_out", e["out_start"])
+            fields = (e.get("goal_id") or "").split(":")
+            side = fields[1] if len(fields) >= 3 else ""
+        else:
+            role = None
+        if role and t is not None and side in ("home", "away"):
+            end = _block_end(entries, i)
+            if end > t:
+                who = "focus" if side == focus_side else "opponent"
+                cues.append({"cue": f"song_{role}_{who}", "t": float(t), "dur_s": end - float(t),
+                             "fade_out_s": SONG_FADE_S, "goal_id": e["goal_id"], "side": side})
+        if e.get("kind") not in LIVE_KINDS:
+            for cut in (e["out_start"], e["out_start"] + e["out_dur"]):
+                if 0 < cut < duration_s:
+                    cues.append({"cue": "sfx_replay_pane", "t": max(0.0, cut - PANE_PEAK_S),
+                                 "dur_s": pane_s,
+                                 "goal_id": e.get("goal_id")})
+    # Back-to-back replays share a cut: one pane.
+    seen, unique = set(), []
+    for c in cues:
+        key = (c["cue"], round(c["t"], 3))
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return unique
+
+
+def period_cut_times(entries: list[dict], periods: list[dict]) -> list[float]:
+    """Output times of the hard cuts where the period changes between live pieces."""
+    cuts, last = [], None
+    for e in entries:
+        if e.get("kind") not in ("goal", "play"):
+            continue
+        n = period_of(float(e.get("moment_s") or e.get("start_s") or 0.0), periods)
+        if last is not None and n != last:
+            cuts.append(e["out_start"])
+        last = n
+    return cuts
+
+
+def _cue_lufs(value) -> float | None:
+    """A manifest cue's measured loudness, or None when it is not a plausible measurement."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) and -70.0 <= value <= 0.0 else None
 
 
 def _close_cue(perspective: str, focus_side: str | None,
@@ -608,12 +748,68 @@ def _edge_fade(buf: np.ndarray, ms: float = 5.0) -> np.ndarray:
     return buf
 
 
-def _entry_audio(entry: dict, windows: list[tuple[float, float]]) -> np.ndarray:
+_DURATIONS: dict[str, float] = {}
+
+
+def _media_duration(path: str) -> float:
+    """Container duration in seconds; 0 when unknown."""
+    if path not in _DURATIONS:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                              "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout.strip()
+        try:
+            _DURATIONS[path] = float(out)
+        except ValueError:
+            _DURATIONS[path] = 0.0
+    return _DURATIONS[path]
+
+
+def next_chapter(path: str) -> str | None:
+    """The next GoPro chapter of the same Recording (G?<chapter+1><file number>), if present."""
+    from recordings import parse_gopro_name
+    p = Path(path)
+    key = parse_gopro_name(p.name)
+    if key is None:
+        return None
+    nxt = p.with_name(f"{p.name[:2]}{key[0] + 1:02d}{key[1]:04d}{p.suffix}")
+    return str(nxt) if nxt.is_file() else None
+
+
+def decode_continued(part: dict, speed: float) -> tuple[np.ndarray, float]:
+    """
+    Decode a continued part (live Replay or FINAL sound) that may run past the end of its
+    chapter file: the rest comes from the Recording's next chapter. Returns the audio and
+    the source seconds that no chapter could supply.
+    """
+    path, seek, need = str(part["file"]), float(part["seek_s"]), float(part["duration_s"])
+    chunks = []
+    while need > 1e-3 and path:
+        length = _media_duration(path)
+        if length and seek >= length:
+            seek -= length
+            path = next_chapter(path)
+            continue
+        take = min(need, length - seek) if length else need
+        chunks.append(decode_audio(path, seek, take, speed))
+        need -= take
+        seek = 0.0
+        path = next_chapter(path) if need > 1e-3 else None
+    buf = np.concatenate(chunks) if chunks else np.zeros((0, 2), dtype=np.float32)
+    return buf, max(0.0, need)
+
+
+def _entry_audio(entry: dict, windows: list[tuple[float, float]],
+                 notes: list[str] | None = None) -> np.ndarray:
     """Rink sound for one timeline entry: parts decoded, PA-muted, atempo'd."""
     speed = float(entry.get("speed") or 1.0)
     bufs = []
     for p in entry["parts"]:
-        buf = decode_audio(p["file"], p["seek_s"], p["duration_s"], speed)
+        if p.get("continued"):
+            buf, missing = decode_continued(p, speed)
+            if missing > 0.05 and notes is not None:
+                notes.append(f"{entry.get('goal_id')}: live sound ends {missing:.1f} s before the cut "
+                             f"({Path(p['file']).name} has no next chapter); silence fills it")
+        else:
+            buf = decode_audio(p["file"], p["seek_s"], p["duration_s"], speed)
         bufs.append(fit_to_length(buf, int(round(float(p["duration_s"]) / speed * SR))))
     buf = np.concatenate(bufs) if bufs else np.zeros((0, 2), dtype=np.float32)
     # Mute windows are in entry source time; entry buffer position = source / speed.
@@ -625,26 +821,32 @@ def _entry_audio(entry: dict, windows: list[tuple[float, float]]) -> np.ndarray:
     return buf
 
 
-def game_sound_entry(entry: dict, windows: list[tuple[float, float]]) -> np.ndarray:
+def game_sound_entry(entry: dict, windows: list[tuple[float, float]],
+                     notes: list[str] | None = None) -> np.ndarray:
     """Keep the source cuts and speed. Lower Replay sound and fade each cut."""
-    buf = fit_to_length(_entry_audio(entry, windows), round(entry["out_dur"] * SR))
-    if entry["kind"] not in ("goal", "play", "cold_open", "stinger", "final"):
+    buf = fit_to_length(_entry_audio(entry, windows, notes), round(entry["out_dur"] * SR))
+    if entry["kind"] not in LIVE_KINDS and not entry.get("live_sound"):
         buf = buf * 10 ** (-8 / 20)
     return _edge_fade(buf, ms=15)
 
 
-def closing_game_sound(closing: dict, previous: dict | None, spans: list[dict]) -> np.ndarray:
+def _continuation(previous: dict, start: float, out_dur: float) -> dict:
+    """The previous piece's source sound, continued from `start` (source s) for out_dur."""
+    duration = out_dur * float(previous.get("speed") or 1)
+    tail = dict(previous, out_dur=out_dur, start_s=start, end_s=start + duration)
+    tail["parts"] = [_continued_part(previous, start, duration)]
+    return tail
+
+
+def closing_game_sound(closing: dict, previous: dict | None, spans: list[dict],
+                       notes: list[str] | None = None) -> np.ndarray:
     """Continue the last source sound under FINAL and fade its final three seconds."""
     n = round(closing["out_dur"] * SR)
     if not previous or not previous.get("parts"):
         return np.zeros((n, 2), dtype=np.float32)
-    tail = dict(previous, out_dur=closing["out_dur"])
-    last = previous["parts"][-1]
     start = previous["start_s"] + sum(p["duration_s"] for p in previous["parts"])
-    duration = closing["out_dur"] * float(previous.get("speed") or 1)
-    tail.update(start_s=start, end_s=start + duration,
-                parts=[dict(last, seek_s=last["seek_s"] + last["duration_s"], duration_s=duration, tl_start=start)])
-    buf = game_sound_entry(tail, mute_windows(tail, spans))
+    tail = _continuation(previous, start, closing["out_dur"])
+    buf = game_sound_entry(tail, mute_windows(tail, spans), notes)
     fade = min(len(buf), 3 * SR)
     if fade:
         buf[-fade:] *= np.linspace(1, 0, fade, dtype=np.float32)[:, None]
@@ -808,11 +1010,21 @@ def main(argv=None) -> int:
         flag("game_sheet.json is missing; close kind and power-play stings follow the plan clips only")
 
     manifest_path = audio_opts.get("manifest") or str(DEFAULT_MANIFEST)
-    manifest, man_flags = (None, []) if game_sound else load_manifest(manifest_path)
+    manifest, man_flags = load_manifest(manifest_path)
     placeholder_mode = manifest is None and not game_sound
+    live_replay = bool(audio_opts.get("live_replay", True))
     if placeholder_mode:
         flag(f"placeholder cue audio: no Cue Library manifest at {manifest_path}; "
              "synthesized cues and bed")
+    elif game_sound and manifest is None:
+        # Game cues are opt-in by library: without one the Recap keeps its rink sound only.
+        if Path(manifest_path).expanduser().exists():
+            for f in man_flags:
+                flag(f"{f}; game cues skipped")
+        elif audio_opts.get("manifest"):
+            flag(f"no Cue Library manifest at {manifest_path}; game cues skipped")
+        else:
+            print(f"[mix] no Cue Library at {manifest_path}; game cues off", flush=True)
     else:
         for f in man_flags:
             flag(f)
@@ -826,7 +1038,8 @@ def main(argv=None) -> int:
                 if g.get("type") == "PP"}
 
     tl = build_timeline(plan, selection=selection,
-                        audio_signals=_load_json(root / "audio_signals.json") or {})
+                        audio_signals=_load_json(root / "audio_signals.json") or {},
+                        live_replay=live_replay)
     for entry in tl:
         if entry["kind"] == "goal" and entry.get("confirmation_out") is None:
             flags.append(f"{entry['goal_id']}: goal confirmation unavailable; horn and GOAL card omitted")
@@ -834,7 +1047,7 @@ def main(argv=None) -> int:
     n = int(round(duration_s * SR))
 
     beds = manifest["beds"] if manifest and not game_sound else []
-    if manifest is not None and not beds:
+    if manifest is not None and not beds and not game_sound:
         flag("the Cue Library manifest has no usable Beds; synthesized placeholder Bed")
     rotation_key = _rotation_key(plan, sheet)
     bed_choices = None
@@ -876,11 +1089,15 @@ def main(argv=None) -> int:
     for cid, dur_s in cue_durations.items():
         if cid.startswith("sting_") and not 2.0 <= dur_s <= 4.0:
             flag(f"sting {cid} is {dur_s:.1f} s; the spec range is 2-4 s")
+    game_cues = game_sound and manifest is not None
+    period_wipes = period_wipe_times(bed_segments, options)
+    period_cuts = ([] if not game_cues or period_wipes
+                   else period_cut_times(tl, selection.get("periods") or []))
     cues = plan_cues(tl, perspective=perspective, focus_side=focus_side, duration_s=duration_s,
                      pp_goals=pp_goals, comic_calls=comic_calls,
                      goal_counts=_sheet_goal_counts(sheet),
-                     period_wipes=period_wipe_times(bed_segments, options),
-                     cue_durations=cue_durations or None)
+                     period_wipes=period_wipes,
+                     cue_durations=cue_durations or None, game_cues=game_cues, period_cuts=period_cuts)
     if not any(c["cue"] == "sting_fight" for c in cues):
         flag("no fight clips in the plan: sting_fight did not fire "
              "(selection.py has no fight producer yet)")
@@ -888,20 +1105,24 @@ def main(argv=None) -> int:
 
     master = np.zeros((n, 2), dtype=np.float32)
     muted = 0
+    sound_notes: list[str] = []
     for i, e in enumerate(tl):
         windows = mute_windows(e, spans)
         try:
             if game_sound and e["kind"] == "final":
                 previous = next((piece for piece in reversed(tl[:i]) if piece.get("parts")), None)
-                buf = closing_game_sound(e, previous, spans)
+                buf = closing_game_sound(e, previous, spans, sound_notes)
             else:
-                buf = game_sound_entry(e, windows) if game_sound else _entry_audio(e, windows)
+                buf = (game_sound_entry(e, windows, sound_notes) if game_sound
+                       else _entry_audio(e, windows, sound_notes))
         except RuntimeError as exc:
             print(f"[ERROR] mix: rink audio: {exc}")
             return 1
         muted += len(windows)
         _place(master, fit_to_length(buf, int(round(e["out_dur"] * SR))), e["out_start"])
         print(f"[mix] rink {i + 1}/{len(tl)} decoded", flush=True)
+    for note in sound_notes:
+        flag(note)
 
     from whistle_presentation import confirm_presentations
     presentation_whistles = confirm_presentations(tl, master, SR)
@@ -910,7 +1131,8 @@ def main(argv=None) -> int:
             flag(f"{record['goal_id']}: whistle not confirmed in kept audio; announcement omitted")
     cues = plan_cues(tl, perspective=perspective, focus_side=focus_side, duration_s=duration_s,
                      pp_goals=pp_goals, comic_calls=comic_calls, goal_counts=_sheet_goal_counts(sheet),
-                     period_wipes=period_wipe_times(bed_segments, options), cue_durations=cue_durations or None)
+                     period_wipes=period_wipes, cue_durations=cue_durations or None,
+                     game_cues=game_cues, period_cuts=period_cuts)
     duck = duck_envelope(n, SR, [c for c in cues if not c["cue"].startswith("sfx_")])
     if game_sound:
         master = normalize_game_sound(master)
@@ -926,7 +1148,12 @@ def main(argv=None) -> int:
 
     manifest_cues = {c["id"]: c for c in (manifest or {}).get("cues", [])}
     skipped_cues: set[str] = set()
-    for c in ([] if game_sound else cues):
+    bad_lufs: set[str] = set()
+    # The report keeps every cue: graphics place the GOAL, penalty and FINAL cards from them.
+    # Game-sound mode plays only the game cues over its rink sound.
+    for c in ([] if game_sound and not game_cues else cues):
+        if game_sound and c["cue"] not in GAME_CUES:
+            continue
         mc = manifest_cues.get(c["cue"])
         if manifest is not None and mc is None:
             if c["cue"] not in skipped_cues:
@@ -939,11 +1166,30 @@ def main(argv=None) -> int:
             except RuntimeError as exc:
                 flag(f"cue {c['cue']} could not be decoded ({exc}); skipped")
                 continue
-            buf = buf * (10.0 ** (float(mc.get("gain_db") or 0.0) / 20.0))
+            gain_db = float(mc.get("gain_db") or 0.0)
+            if game_cues and mc.get("lufs") is not None:
+                lufs = _cue_lufs(mc.get("lufs"))
+                if lufs is None:
+                    if c["cue"] not in bad_lufs:
+                        bad_lufs.add(c["cue"])
+                        flag(f"cue {c['cue']}: lufs {mc.get('lufs')!r} is not a measured loudness "
+                             "(-70 to 0 LUFS); gain_db only")
+                else:
+                    gain_db += GAME_CUE_LUFS[c["cue"]] - lufs
+            buf = buf * (10.0 ** (gain_db / 20.0))
+            short = c["dur_s"] - len(buf) / SR
+            if c.get("fade_out_s") and short > 0.05:
+                flag(f"cue {c['cue']} is {short:.1f} s shorter than its window at {c['t']:.1f} s; "
+                     "it fades at its own end and silence follows")
+                c = dict(c, dur_s=len(buf) / SR)
         else:
             timed_open = c["cue"] == "game_start" and any(e["kind"] == "stinger" for e in tl)
             buf = synth_placeholder(c["cue"], duration_s=c["dur_s"] if timed_open else None)
-        _place(master, _edge_fade(fit_to_length(buf, int(round(c["dur_s"] * SR)))), c["t"])
+        buf = _edge_fade(fit_to_length(buf, int(round(c["dur_s"] * SR))))
+        fade = min(len(buf), int(round(float(c.get("fade_out_s") or 0.0) * SR)))
+        if fade:
+            buf[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)[:, None]
+        _place(master, buf, c["t"])
 
     with tempfile.TemporaryDirectory(prefix="hockey-mix-") as scratch:
         raw = Path(scratch) / "mix.f32"
@@ -1025,6 +1271,7 @@ def main(argv=None) -> int:
     report = {"schema_version": 1, "output": out_name, "video": plan["output"],
               "duration_s": round(duration_s, 3), "perspective": perspective,
               "focus_side": focus_side, "placeholder": placeholder_mode, "mode": mode,
+              "live_replay": live_replay, "game_cues": game_cues,
               "opening_sound": opening["opening_video"] if opening and game_sound else None,
               "manifest": manifest_path if manifest is not None else None,
               "bed_gain_db": bed_gain_db, "bed": bed_segments,

@@ -39,18 +39,19 @@ def frozen_game(tmp_path, freeze_sheet):
     return sheet, options, selection, plan
 
 
-def props_for(tmp_path, fixture, whistle, *, cue_delay=0):
+def props_for(tmp_path, fixture, whistle, *, cue_delay=0, live_replay=False, proof_live=None):
     sheet, options, selection, plan = fixture
     signals = {"whistles": [{"t": whistle}]}
-    timeline = am.build_timeline(plan, selection=selection, audio_signals=signals)
+    timeline = am.build_timeline(plan, selection=selection, audio_signals=signals, live_replay=live_replay)
     cues = am.plan_cues(timeline, duration_s=plan["duration_s"])
     for cue in cues:
         if cue["cue"] == "sfx_goal_card":
             cue["t"] += cue_delay
     audio = {"output": "synthetic_Recap_audio.mp4", "video": plan["output"],
-              "duration_s": plan["duration_s"], "cues": cues}
+              "duration_s": plan["duration_s"], "cues": cues, "live_replay": live_replay}
     from test_recap_graphics import acoustic_proofs
-    audio["presentation_whistles"] = acoustic_proofs(plan, selection, signals)
+    audio["presentation_whistles"] = acoustic_proofs(
+        plan, selection, signals, live_replay if proof_live is None else proof_live)
     return rg.write_props(tmp_path, sheet, selection, plan, audio, options, publish=False,
                           coverage={"periods": selection["periods"]}, audio_signals=signals)
 
@@ -133,7 +134,7 @@ def test_game_sound_keeps_mastered_opening_gain_when_output_peak_is_safe(tmp_pat
         (tmp_path / name).write_text(json.dumps(value))
     (tmp_path / plan["output"]).touch()
     options["audio"] = {"manifest": str(tmp_path / "unused-manifest.json")}
-    monkeypatch.setattr(am, "game_sound_entry", lambda e, w: np.zeros((round(e["out_dur"] * am.SR), 2), dtype=np.float32))
+    monkeypatch.setattr(am, "game_sound_entry", lambda e, w, *_: np.zeros((round(e["out_dur"] * am.SR), 2), dtype=np.float32))
     monkeypatch.setattr(am, "normalize_game_sound", lambda buf: buf)
     monkeypatch.setattr(am, "decode_audio", lambda path, seek, duration, speed=1: np.full((round(duration * am.SR), 2), .2, dtype=np.float32))
     monkeypatch.setattr(am, "_probe_duration", lambda path: plan["duration_s"])
@@ -262,3 +263,114 @@ def test_acoustic_delay_past_live_cut_is_checked_in_the_bound_replay(tmp_path, f
     onset = proof[0]["onset_t"]
     assert onset is not None and audible <= onset < audible + .2, (
         "The output-only search missed the bound whistle retained by Replay", proof, audible)
+
+
+def _game_cue_mix(tmp_path, monkeypatch, frozen_game, *, song_s=20.0, lufs=-10.0):
+    """Run the game-sound mix with a small Cue Library; return the report, placed buffers, rink pieces."""
+    sheet, options, selection, plan = frozen_game
+    opening_path = tmp_path / "mastered_opening.mp4"
+    opening_path.touch()
+    plan["opening"] = [{"kind": "stinger", "goal_id": "open", "start_s": 0, "moment_s": 0,
+                        "speed": 1, "frames": 139, "parts": [],
+                        "opening_video": {"path": str(opening_path), "frames": 148}}]
+    plan["duration_s"] += 139 / 30
+    plan["clips"][0]["parts"] = [{"file": "live.mp4", "seek_s": 10, "duration_s": 10}]
+    plan["replays"][0]["parts"] = [{"file": "live.mp4", "seek_s": 14, "duration_s": 10}]
+    library = tmp_path / "cues"
+    library.mkdir()
+    cues = []
+    for cid in ("horn", "song_goal_focus", "sfx_replay_pane", "close_win"):
+        (library / f"{cid}.wav").touch()
+        cues.append({"id": cid, "file": f"{cid}.wav", "lufs": lufs,
+                     "duration_s": song_s if cid == "song_goal_focus" else 12.0})
+    (library / "manifest.json").write_text(json.dumps({"schema_version": 1, "beds": [], "cues": cues}))
+    for name, value in {"recap_assembly.json": plan, "selection.json": selection,
+                        "coverage.json": {"periods": selection["periods"]},
+                        "music_spans.json": {"spans": []}, "game_sheet.json": sheet,
+                        "audio_signals.json": {"whistles": [{"t": 17.011}]}}.items():
+        (tmp_path / name).write_text(json.dumps(value))
+    (tmp_path / plan["output"]).touch()
+    options.update(perspective="focus", focus_team=sheet["teams"]["home"],
+                   audio={"manifest": str(library / "manifest.json")})
+    (tmp_path / "game_data.json").unlink(missing_ok=True)   # read the Focus Team from game_sheet.json
+    import whistle_presentation
+    monkeypatch.setattr(whistle_presentation, "confirm_presentations", lambda *a: [])
+    rink = []
+    monkeypatch.setattr(am, "game_sound_entry", lambda e, w, *_: rink.append(e) or np.zeros(
+        (round(e["out_dur"] * am.SR), 2), dtype=np.float32))
+    monkeypatch.setattr(am, "normalize_game_sound", lambda buf: buf)
+    monkeypatch.setattr(am, "decode_audio", lambda path, seek, duration, speed=1: np.full(
+        (round(duration * am.SR), 2), .2 if "opening" not in str(path) else 0, dtype=np.float32))
+    monkeypatch.setattr(am, "_probe_duration", lambda path: plan["duration_s"])
+    placed = []
+    place = am._place
+    monkeypatch.setattr(am, "_place", lambda master, buf, t: placed.append((t, buf.copy())) or place(master, buf, t))
+    monkeypatch.setattr(am.subprocess, "run", lambda argv, **k: (Path(argv[-1]).touch() if "-c:a" in argv else None)
+                        or SimpleNamespace(returncode=0, stdout=b"", stderr=b""))
+    monkeypatch.setattr(am, "_measure_loudness", lambda *a, **k: {
+        "input_i": -14, "input_tp": -2, "input_lra": 7, "input_thresh": -30, "target_offset": 0})
+    assert am.main([str(tmp_path), "--options", json.dumps(options)]) == 0
+    return json.loads((tmp_path / "recap_audio.json").read_text()), placed, rink
+
+
+def test_game_cues_play_from_the_library_at_their_levels_over_live_replay_sound(tmp_path, monkeypatch, frozen_game):
+    """hhg-3r5.110: songs, horn and panes from the Cue Library in game-sound mode."""
+    report, placed, rink = _game_cue_mix(tmp_path, monkeypatch, frozen_game)
+    assert report["game_cues"] and report["live_replay"]
+    names = [c["cue"] for c in report["cues"]]
+    assert {"horn", "song_goal_focus", "sfx_replay_pane", "close_win"} <= set(names)
+    # Graphics read their cards from the report, so the card cues stay; they get no audio.
+    assert {"sfx_goal_card", "sfx_final_card"} <= set(names)
+    assert not any(t == next(c["t"] for c in report["cues"] if c["cue"] == "sfx_goal_card")
+                   and len(b) == round(.25 * am.SR) for t, b in placed)
+    assert not any("sfx_goal_card" in f or "game_start" in f for f in report["flags"])
+    # The replay's rink sound is the live clip continued at its own speed, not the slowed replay.
+    stinger, live, replay_sound, final_sound = rink
+    assert live["parts"][0]["seek_s"] == 10
+    assert replay_sound["live_sound"] and replay_sound["parts"][0]["seek_s"] == pytest.approx(20)
+    # FINAL continues from the end of that live sound, not from the slowed replay source.
+    assert final_sound["parts"][0]["seek_s"] == pytest.approx(30)
+    song = next(c for c in report["cues"] if c["cue"] == "song_goal_focus")
+    buf = next(b for t, b in placed if t == song["t"] and len(b) == round(song["dur_s"] * am.SR))
+    # Measured -10 LUFS to the -18 LUFS target: -8 dB; the last second fades to silence.
+    assert buf[len(buf) // 2, 0] == pytest.approx(.2 * 10 ** (-8 / 20), rel=1e-4)
+    assert buf[-1, 0] == pytest.approx(0, abs=1e-6)
+    assert song["t"] + song["dur_s"] == pytest.approx(139 / 30 + 20)
+    # The pane sound keeps its library length (Pane A peaks after the cut's 8th frame).
+    pane = next(c for c in report["cues"] if c["cue"] == "sfx_replay_pane")
+    assert pane["dur_s"] == 12.0
+
+
+def test_a_short_song_fades_at_its_own_end_and_is_flagged(tmp_path, monkeypatch, frozen_game):
+    """Review finding: a song file shorter than its window must not fade silence."""
+    report, placed, _ = _game_cue_mix(tmp_path, monkeypatch, frozen_game, song_s=4.0)
+    song = next(c for c in report["cues"] if c["cue"] == "song_goal_focus")
+    buf = next(b for t, b in placed if t == song["t"] and len(b) == 4 * am.SR)
+    assert buf[2 * am.SR, 0] == pytest.approx(.2 * 10 ** (-8 / 20), rel=1e-4)
+    assert buf[-1, 0] == pytest.approx(0, abs=1e-6)
+    assert any("song_goal_focus is" in f and "shorter than its window" in f for f in report["flags"])
+
+
+@pytest.mark.parametrize("lufs", ["unknown", float("inf"), -10000.0, 3.0])
+def test_an_implausible_cue_loudness_is_flagged_not_applied(tmp_path, monkeypatch, frozen_game, lufs):
+    """Review finding: a bad manifest `lufs` must not crash the mix or corrupt the audio."""
+    report, placed, _ = _game_cue_mix(tmp_path, monkeypatch, frozen_game, lufs=lufs)
+    song = next(c for c in report["cues"] if c["cue"] == "song_goal_focus")
+    buf = next(b for t, b in placed if t == song["t"] and len(b) == round(song["dur_s"] * am.SR))
+    assert np.isfinite(buf).all() and buf[len(buf) // 2, 0] == pytest.approx(.2, rel=1e-4)
+    assert any("not a measured loudness" in f for f in report["flags"])
+
+
+def test_graphics_map_a_whistle_through_live_replay_sound(tmp_path, frozen_game):
+    """Review finding: with live Replay sound, a whistle after the live cut plays at live speed."""
+    plan = frozen_game[3]
+    plan["clips"][0]["parts"] = [{"file": "live.mp4", "seek_s": 10, "duration_s": 10}]
+    replay = plan["replays"][0]
+    replay.update(speed=.5, frames=round((replay["end_s"] - replay["start_s"]) / .5 * 30))
+    plan["duration_s"] = sum(e["frames"] for e in plan["clips"] + plan["replays"] + plan["closing"]) / 30
+    props = props_for(tmp_path, frozen_game, 20.02, live_replay=True)
+    goal = next(e for e in props["events"] if e["kind"] == "goal")
+    assert goal["startFrame"] == math.ceil(10.02 * 30 - 1e-8)
+    # A proof measured on slowed sound does not bind to a live-sound report.
+    with pytest.raises(ValueError, match="rerun mix"):
+        props_for(tmp_path, frozen_game, 20.02, live_replay=True, proof_live=False)
