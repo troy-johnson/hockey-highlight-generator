@@ -299,14 +299,18 @@ def plan_cues(entries: list[dict], perspective: str = "neutral", focus_side: str
                 add("sting_comic_call", e["out_start"], goal_id=e["goal_id"])
     for w in period_wipes:
         add("sfx_period_wipe", w)
-    if game_cues:
-        cues.extend(_game_cues(entries, focus_side if perspective == "focus" else None, duration_s,
-                               durs["sfx_replay_pane"], period_wipes))
-        for t in period_cuts:
-            add("sfx_period_cut", t)
     close_id = _close_cue(perspective, focus_side, goal_counts, entries)
     closing = next((e for e in entries if e.get("kind") == "final"), None)
     close_t = closing["out_start"] if closing else max(0.0, duration_s - durs.get(close_id, 2.0))
+    if game_cues:
+        # recap_graphics places FINAL at the closing piece, else near the card cue.
+        frames = round(duration_s * FPS)
+        final_frame = (round(closing["out_start"] * FPS) if closing else
+                       max(0, min(math.ceil(close_t * FPS - 1e-8), frames - 5 * FPS)))
+        cues.extend(_game_cues(entries, focus_side if perspective == "focus" else None, duration_s,
+                               durs["sfx_replay_pane"], period_wipes, final_frame))
+        for t in period_cuts:
+            add("sfx_period_cut", t)
     add("sfx_final_card", close_t)
     add(close_id, close_t)
     cues.sort(key=lambda c: (c["t"], 1 if c["cue"].startswith("close_") else 0))
@@ -324,18 +328,19 @@ def _block_end(entries: list[dict], i: int) -> float:
 
 
 def _game_cues(entries: list[dict], focus_side: str | None, duration_s: float,
-               pane_s: float = PLACEHOLDER_DUR_S["sfx_replay_pane"], period_wipes=()) -> list[dict]:
+               pane_s: float = PLACEHOLDER_DUR_S["sfx_replay_pane"], period_wipes=(),
+               final_frame: int | None = None) -> list[dict]:
     """
     Songs and replay panes. A goal song starts at the goal confirmation, a penalty song at
     the penalty card, and each runs to the end of its replay block, fading over the last
     SONG_FADE_S. Goal songs follow the scoring team; penalty songs (ids like
     "penalty:home:1") follow the penalized team. A pane sound, pane_s long (the library
     file), starts PANE_PEAK_S early so its peak lands on each replay cut. Panes follow
-    recap_graphics: none on a period-wipe cut, within 8 frames of either end, or where a
-    Replay exits into FINAL.
+    recap_graphics: none on a drawn period-wipe cut (a 30-frame wipe that fits), within
+    8 frames of either end, or where a Replay exits at the FINAL frame.
     """
     frames = round(duration_s * FPS)
-    wipe_frames = {round(w * FPS) for w in period_wipes}
+    wipe_frames = {f for f in (round(w * FPS) for w in period_wipes) if f >= 15 and f + 15 <= frames}
     cues = []
     for i, e in enumerate(entries):
         role, side, t = None, "", None
@@ -352,12 +357,11 @@ def _game_cues(entries: list[dict], focus_side: str | None, duration_s: float,
                 cues.append({"cue": f"song_{role}_{who}", "t": float(t), "dur_s": end - float(t),
                              "fade_out_s": SONG_FADE_S, "goal_id": e["goal_id"], "side": side})
         if e.get("kind") not in LIVE_KINDS:
-            following = entries[i + 1] if i + 1 < len(entries) else None
             for edge, cut in (("in", e["out_start"]), ("out", e["out_start"] + e["out_dur"])):
                 frame = round(cut * FPS)
                 if frame < 8 or frame + 8 > frames or frame in wipe_frames:
                     continue
-                if edge == "out" and following is not None and following.get("kind") == "final":
+                if edge == "out" and frame == final_frame:
                     continue
                 cues.append({"cue": "sfx_replay_pane", "t": cut - PANE_PEAK_S, "dur_s": pane_s,
                              "goal_id": e.get("goal_id")})
@@ -760,29 +764,38 @@ _DURATIONS: dict[str, float] = {}
 
 
 def _media_duration(path: str) -> float:
-    """Container duration in seconds; 0 when unknown."""
+    """Audio stream duration in seconds (the container's when the stream has none); 0 when
+    unknown. Continued sound walks chapters by the audio it can decode, not the container."""
     if path not in _DURATIONS:
-        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                              "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout.strip()
-        try:
-            _DURATIONS[path] = float(out)
-        except ValueError:
-            _DURATIONS[path] = 0.0
+        _DURATIONS[path] = 0.0
+        for entry in ("stream=duration", "format=duration"):
+            argv = ["ffprobe", "-v", "error"] + (["-select_streams", "a:0"] if entry.startswith("stream") else [])
+            out = subprocess.run(argv + ["-show_entries", entry, "-of", "csv=p=0", str(path)],
+                                 capture_output=True, text=True).stdout.strip().splitlines()
+            try:
+                value = float(out[0]) if out else 0.0
+            except ValueError:
+                value = 0.0
+            if value > 0:
+                _DURATIONS[path] = value
+                break
     return _DURATIONS[path]
 
 
 NEXT_CHAPTER: dict[str, str] = {}   # chapter path -> next chapter of its Recording
 
 
-def set_recordings(chapters: dict | None) -> None:
+def set_recordings(chapters: dict | None, root: Path | str = ".") -> None:
     """Load chapter order from chapters.json. Only discover.py knows a chapter's camera:
     in a flat folder, two cameras' files can share GoPro names, so names alone do not say
     which file continues a Recording."""
     NEXT_CHAPTER.clear()
+    # discover.py may write paths relative to the Game Folder: resolve them against it.
+    where = lambda f: os.path.realpath(os.path.join(str(root), str(f)))  # noqa: E731
     for recordings in ((chapters or {}).get("recordings") or {}).values():
         for rec in recordings or []:
             for a, b in zip(rec, rec[1:]):
-                NEXT_CHAPTER[os.path.realpath(a)] = b
+                NEXT_CHAPTER[where(a)] = where(b)
 
 
 def next_chapter(path: str) -> str | None:
@@ -807,11 +820,15 @@ def decode_continued(part: dict, speed: float) -> tuple[np.ndarray, float]:
             path = next_chapter(path)
             continue
         take = min(need, length - seek) if length else need
+        reaches_end = not length or seek + need >= length - 1e-3
         chunk = decode_audio(path, seek, take, speed)
         chunks.append(chunk)
-        # Count what was decoded, not what was asked: a short read means the file ended
-        # there, so the next chapter starts at its beginning and the timing stays exact.
+        # Count what was decoded, not what was asked. Inside a chapter a few ms short is
+        # atempo rounding (padded later); at the chapter's end, or when its length is
+        # unknown, a short read means the file ended, so the next chapter starts at 0.
         need -= len(chunk) / SR * speed
+        if not reaches_end:
+            break
         seek = 0.0
         path = next_chapter(path)
     buf = np.concatenate(chunks) if chunks else np.zeros((0, 2), dtype=np.float32)
@@ -1009,7 +1026,7 @@ def main(argv=None) -> int:
     if not -20.0 <= bed_gain_db <= -18.0:
         flag(f"bed gain {bed_gain_db} dB is outside the spec range (-20 to -18 dB)")
 
-    set_recordings(_load_json(root / "chapters.json"))
+    set_recordings(_load_json(root / "chapters.json"), root)
     music = _load_json(root / "music_spans.json")
     spans = (music or {}).get("spans") or []
     if music is None:

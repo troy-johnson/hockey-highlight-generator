@@ -645,3 +645,44 @@ def test_no_pane_sound_where_a_replay_exits_into_final():
     panes = [c["t"] for c in am.plan_cues(tl, duration_s=17.0, game_cues=True)
              if c["cue"] == "sfx_replay_pane"]
     assert panes == pytest.approx([10.0 - 8 / am.FPS])
+
+
+def test_atempo_rounding_inside_a_chapter_does_not_pull_in_the_next(tmp_path):
+    """Review round 3: a few ms short at 1.1x inside a chapter is rounding, not its end."""
+    first = _chapter(tmp_path / "GX010001.MP4", 3000, seconds=20.0)
+    second = _chapter(tmp_path / "GX020001.MP4", 6000)
+    am.set_recordings({"recordings": {"cam1": [[first, second]]}})
+    buf, missing = am.decode_continued({"file": first, "seek_s": 2.0, "duration_s": 5.5}, 1.1)
+    assert missing < .05
+    assert np.max(buf[:, 0]) == pytest.approx(3000 / 32768, rel=1e-3)   # no chapter-2 audio
+
+
+def test_relative_chapter_paths_resolve_against_the_game_folder(tmp_path):
+    """Review round 3: discover('.') can write relative paths."""
+    first = _chapter(tmp_path / "GX010001.MP4", 3000)
+    second = _chapter(tmp_path / "GX020001.MP4", 6000)
+    am.set_recordings({"recordings": {"cam1": [["GX010001.MP4", "GX020001.MP4"]]}}, tmp_path)
+    assert am.next_chapter(first) == str(Path(second).resolve())
+
+
+def test_no_pane_sound_at_the_fallback_final_frame():
+    """Review round 3: without a closing piece graphics place FINAL at most 5 s before the end."""
+    tl = am.build_timeline(_plan([_entry("home:1", frames=300),
+                                  _entry("away:1", start=20, end=30, frames=150)],
+                                 [_replay("home:1", 4.0, frames=300)]))
+    assert [e["out_start"] for e in tl] == [0.0, 10.0, 20.0]
+    panes = [c["t"] for c in am.plan_cues(tl, duration_s=25.0, game_cues=True)
+             if c["cue"] == "sfx_replay_pane"]
+    assert panes == pytest.approx([10.0 - 8 / am.FPS])
+
+
+def test_a_wipe_that_cannot_fit_does_not_silence_the_pane():
+    """Review round 3: graphics omit a wipe too close to the end and still draw the pane."""
+    tl = am.build_timeline(_plan([_entry("home:1", frames=300)], [_replay("home:1", 4.0, frames=440)]))
+    cut = 740 / am.FPS
+    panes = [c["t"] for c in am.plan_cues(tl, duration_s=25.0, game_cues=True, period_wipes=[cut])
+             if c["cue"] == "sfx_replay_pane"]
+    assert panes == pytest.approx([10.0 - 8 / am.FPS, cut - 8 / am.FPS])
+    panes = [c["t"] for c in am.plan_cues(tl, duration_s=25.0, game_cues=True, period_wipes=[10.0])
+             if c["cue"] == "sfx_replay_pane"]
+    assert panes == pytest.approx([cut - 8 / am.FPS])
