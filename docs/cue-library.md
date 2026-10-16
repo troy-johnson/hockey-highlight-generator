@@ -34,6 +34,10 @@ Use only these sources:
 - YouTube Audio Library.
 - Pixabay tracks without Content ID registration.
 - Freesound tracks with a CC0 license.
+- Suno songs made on a paid plan. Use the source `Suno` and the license `Suno Pro` or `Suno Premier`.
+  Songs made on the free plan are for personal use only, and validation rejects them.
+- Original work that we make. Use the source `Original`. The proof file is the script or project file.
+  An Original entry may omit `provenance.url`.
 
 Check the track page, license, and Content ID status before approval.
 Save the source evidence under `provenance/`. Complete any required attribution for the source license.
@@ -87,7 +91,7 @@ Files and evidence must remain inside the library, including resolved symlink ta
 The authoring tool requires these additional fields on every entry:
 
 - `source`, `content_id_safe: true`, and `approved: true`.
-- `provenance.url`, `provenance.license`, and a relative `provenance.proof` file.
+- `provenance.url` (optional for `Original`), `provenance.license`, and a relative `provenance.proof` file.
 - `provenance.sha256`, `provenance.approved_by`, and ISO-date `provenance.approved_at`.
 
 Each Bed requires `bpm`, `bar_s`, or at least two increasing `beats` timestamps within its duration.
@@ -99,7 +103,7 @@ These authoring checks are stricter than `audio_mix.load_manifest`.
 The mixer still accepts the original schema-1 contract and ignores authoring metadata.
 Validate the library before using it. Changing approved media bytes requires renewed approval and registration.
 
-The mixer consumes exactly these 14 cue IDs:
+The mixer consumes exactly these 20 cue IDs:
 
 ```text
 game_start           horn
@@ -108,7 +112,37 @@ sting_penalty        sting_power_play    sting_fight
 sting_comic_call     sting_neutral
 sfx_goal_card        sfx_penalty_card
 sfx_period_wipe      sfx_final_card
+song_goal_focus      song_goal_opponent
+song_penalty_focus   song_penalty_opponent
+sfx_replay_pane      sfx_period_cut
 ```
+
+## Game cues
+
+The game-sound mix (a Recap with a pre-rendered opening) uses these cues when a manifest exists (hhg-3r5.110).
+Cue IDs name a role, not a track. A re-created track replaces the file and its approval record only.
+
+| Cue | When it plays | Level alone |
+|---|---|---|
+| `horn` | A Focus Team goal, at the goal confirmation | -16 LUFS |
+| `song_goal_focus` | A Focus Team goal, from the confirmation to the end of its Replays | -18 LUFS |
+| `song_goal_opponent` | An opponent goal, the same window | -20 LUFS |
+| `song_penalty_focus` | A penalty on the Focus Team, from the card to the end of its Replays | -20 LUFS |
+| `song_penalty_opponent` | A penalty on the opponent, the same window | -18 LUFS |
+| `close_win`, `close_loss`, `close_neutral` | From the FINAL card to the end | -18, -20, -20 LUFS |
+| `sfx_replay_pane` | Each Replay cut; the sound starts 8 frames early so its peak lands on the cut | -20 LUFS |
+| `sfx_period_cut` | Each plain period cut | -22 LUFS |
+
+Songs need Focus Perspective. Each song fades out over its last second and ends on the cut.
+Make each song file at least as long as its longest window: a goal and its Replays, about 11-13 s.
+A shorter file fades at its own end, silence follows, and the mix flags it.
+The pane sound plays for its full file length. Put its peak 8 frames (0.27 s) after the file start.
+Record each cue's measured loudness in `lufs`. The mixer sets the gain from it to reach the level above; `gain_db` adds to that.
+Without `lufs`, only `gain_db` applies. A `lufs` value outside -70 to 0 is flagged and ignored.
+Prepare each file at its final sound: the mixer adds no arena treatment.
+A close cue should be the track's ending, as long as the FINAL card.
+`sfx_period_wipe` stays the sound of the full period pane: graphics draw that pane from it.
+Without a manifest, the game-sound mix plays rink sound and the opening only.
 
 ## Derive beat grids
 

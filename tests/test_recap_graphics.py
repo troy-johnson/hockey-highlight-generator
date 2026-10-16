@@ -41,11 +41,11 @@ def game():
     return sheet, selection, plan, audio
 
 
-def acoustic_proofs(plan, selection, signals):
+def acoustic_proofs(plan, selection, signals, live_replay=False):
     """Stub the measured onset at the bound time for isolated schedule tests."""
     from audio_mix import build_timeline
     from whistle_presentation import METHOD, presentation_piece, source_binding
-    timeline = build_timeline(plan, selection=selection, audio_signals=signals)
+    timeline = build_timeline(plan, selection=selection, audio_signals=signals, live_replay=live_replay)
     return [{"goal_id": e["goal_id"], "mapped_t": e["confirmation_out"], "onset_t": e["confirmation_out"],
              "method": METHOD, "piece": source_binding(presentation_piece(timeline, e["goal_id"], e["confirmation_out"]))}
             for e in timeline if e.get("confirmation_out") is not None]
