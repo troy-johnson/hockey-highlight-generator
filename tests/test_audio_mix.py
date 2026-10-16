@@ -562,14 +562,15 @@ def _chapter(path, value, seconds=1.0):
 def test_continued_sound_crosses_into_the_next_chapter(tmp_path):
     """Review finding: live sound past the chapter end reads the Recording's next chapter."""
     first = _chapter(tmp_path / "GX010001.MP4", 3000)
-    _chapter(tmp_path / "GX020001.MP4", 6000)
+    second = _chapter(tmp_path / "GX020001.MP4", 6000)
+    am.set_recordings({"recordings": {"cam1": [[first, second]]}})
     buf, missing = am.decode_continued({"file": first, "seek_s": .5, "duration_s": 1.0}, 1.0)
-    assert missing == 0 and len(buf) == pytest.approx(am.SR, abs=480)
+    assert missing == pytest.approx(0, abs=.01) and len(buf) == pytest.approx(am.SR, abs=480)
     assert buf[am.SR // 4, 0] == pytest.approx(3000 / 32768, rel=1e-3)
     assert buf[3 * am.SR // 4, 0] == pytest.approx(6000 / 32768, rel=1e-3)
     # A seek past the first chapter starts inside the second.
     buf, missing = am.decode_continued({"file": first, "seek_s": 1.2, "duration_s": .5}, 1.0)
-    assert missing == 0 and buf[100, 0] == pytest.approx(6000 / 32768, rel=1e-3)
+    assert missing == pytest.approx(0, abs=.01) and buf[100, 0] == pytest.approx(6000 / 32768, rel=1e-3)
     # The last chapter: the shortfall is reported, and the mix flags it.
     buf, missing = am.decode_continued({"file": first, "seek_s": 1.5, "duration_s": 1.0}, 1.0)
     assert missing == pytest.approx(.5, abs=.01)
@@ -593,3 +594,54 @@ def test_a_long_close_cue_never_starts_before_the_recap():
     cues = am.plan_cues(tl, duration_s=10.0, game_cues=True, cue_durations={"close_neutral": 20.0})
     assert min(c["t"] for c in cues) >= 0
     assert next(c for c in cues if c["cue"] == "sfx_final_card")["t"] == 0.0
+
+
+
+def test_continued_sound_stays_in_its_own_camera_recording(tmp_path):
+    """Review round 2: in a flat folder another camera's file can carry the next chapter name."""
+    first = _chapter(tmp_path / "GX010001.MP4", 3000)
+    _chapter(tmp_path / "GX020001.MP4", 6000)                 # cam2's file, same GoPro name
+    am.set_recordings({"recordings": {"cam1": [[first]], "cam2": [[str(tmp_path / "GX020001.MP4")]]}})
+    buf, missing = am.decode_continued({"file": first, "seek_s": .5, "duration_s": 1.0}, 1.0)
+    assert missing == pytest.approx(.5, abs=.01)
+    am.set_recordings(None)
+    assert am.next_chapter(first) is None
+
+
+@pytest.mark.parametrize("probed", [1.5, 0.0])
+def test_a_short_decode_moves_to_the_next_chapter_at_its_start(tmp_path, monkeypatch, probed):
+    """Review round 2: count decoded audio, not the request; an unknown length still continues."""
+    first = _chapter(tmp_path / "GX010001.MP4", 3000)
+    second = _chapter(tmp_path / "GX020001.MP4", 6000)
+    am.set_recordings({"recordings": {"cam1": [[first, second]]}})
+    monkeypatch.setattr(am, "_media_duration", lambda path: probed if path == first else 1.0)
+    buf, missing = am.decode_continued({"file": first, "seek_s": .5, "duration_s": 1.0}, 1.0)
+    assert missing == pytest.approx(0, abs=.01) and len(buf) == pytest.approx(am.SR, abs=480)
+    # The first 0.5 s is chapter 1's end; chapter 2 follows from its own start.
+    assert buf[am.SR // 4, 0] == pytest.approx(3000 / 32768, rel=1e-3)
+    assert buf[3 * am.SR // 4, 0] == pytest.approx(6000 / 32768, rel=1e-3)
+
+
+def test_live_replay_keeps_the_pictured_time_for_period_lookups():
+    """Review round 2: a Replay's period follows its picture, not its continued sound."""
+    clips = [_entry("home:1", start=90.0, end=100.0, moment=95.0, speed=1),
+             _entry("away:1", start=200.0, end=210.0, moment=205.0, speed=1)]
+    replay = _replay("home:1", 94.0, frames=180)
+    replay.pop("moment_s")                                   # production Replays omit it
+    tl = am.build_timeline(_plan(clips, [replay]), live_replay=True)
+    assert tl[1]["moment_s"] == 94.0 and tl[1]["start_s"] == pytest.approx(100.0)
+    periods = [{"n": 1, "start": 0.0, "end": 100.0}, {"n": 2, "start": 100.0, "end": 300.0}]
+    segments = am.plan_bed(tl, periods, [], "game")
+    assert segments[1]["boundary"] >= 16.0 - 1e-9
+
+
+def test_no_pane_sound_where_a_replay_exits_into_final():
+    """Review round 2: graphics draw no pane at the FINAL cut, so no pane sound plays there."""
+    final = {"kind": "final", "goal_id": "close", "start_s": 0, "moment_s": 0, "speed": 1,
+             "frames": 150, "parts": []}
+    plan = _plan([_entry("home:1", frames=300)], [_replay("home:1", 4.0)])
+    plan["closing"] = [final]
+    tl = am.build_timeline(plan)
+    panes = [c["t"] for c in am.plan_cues(tl, duration_s=17.0, game_cues=True)
+             if c["cue"] == "sfx_replay_pane"]
+    assert panes == pytest.approx([10.0 - 8 / am.FPS])

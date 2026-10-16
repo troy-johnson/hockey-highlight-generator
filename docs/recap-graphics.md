@@ -222,8 +222,9 @@ The asset stays outside git. The pipeline does not change the real database or T
 The normal mix uses `audio.mode: game_sound` when an assembly contains a pre-rendered opening.
 It keeps source seeks and speed and applies 15 ms cut fades.
 By default a Replay has live sound: the live clip's source continues at the clip's speed, so the sound under a Replay follows on from the play.
-FINAL continues from the end of that sound. Sound that runs past the end of a chapter file continues in the Recording's next chapter.
-If no next chapter exists, silence fills the rest and the mix flags it.
+FINAL continues from the end of that sound. Sound that runs past the end of a chapter file continues in the next chapter of the same camera Recording, as `chapters.json` lists it.
+If no next chapter is listed, silence fills the rest and the mix flags it.
+A Replay keeps its pictured time for Bed and period lookups. No pane sound plays where a Replay exits into FINAL, matching the graphics.
 Whistle times map through the sound the mix used. Graphics read `live_replay` from `recap_audio.json`, so a proof stays bound to its mix.
 Set `audio.live_replay: false` to use the slowed Replay sound, lowered by 8 dB.
 It normalizes rink sound to -20 LUFS before adding the opening sound, then limits the output peak.
